@@ -90,8 +90,9 @@ Completed after the breakthrough:
 - The repo now also supports experimental **batch** extraction for multiple matching files from one live manifest query:
   - `extract-files <query> <pathFilter> [--prefix]`
   - it resolves slice URLs once for the matched set and reuses already-downloaded slice payloads across files when possible.
-- To make that workflow easier, the CLI now also supports normalized live manifest-path filtering in `files`:
+- To make that workflow easier, the CLI now also supports normalized manifest-path filtering in both `files` and `download-plan`:
   - `files <query> --live --match <pathFilter> [--prefix]`
+  - `download-plan <query> [--live] --match <pathFilter> [--prefix]`
   - slash style and casing are normalized so Windows-style manifest paths can be queried with either `\\` or `/` separators.
 - Live validation on Origins with `extract-files 3539 'Support\\Readme' --prefix --limit 3` reconstructed three readme files into one output tree with:
   - `matchedCount: 15`
@@ -101,7 +102,9 @@ Completed after the breakthrough:
   - `bytesDownloaded: 14081`
   - `bytesWritten: 51942`
 - That specific live sample did not demonstrate cross-file slice reuse, but the batch path itself now works live and reuse is covered by unit tests.
-- Whole-build reconstruction is still unreliable though: this is now stronger evidence that some individual multi-slice files and small matching batches can be rebuilt correctly, but the repo still does not implement full installer/update orchestration.
+- The repo now also persists downloaded raw slice payloads under the local cache directory and reuses them across later extraction/download commands when the same slice hash is requested again.
+- Live validation on Origins showed the same `extract-file 3539 'Support\\Readme\\English\\Readme.txt'` command dropping from `bytesDownloaded: 4532` on first run to `bytesDownloaded: 0` on second run, with transfer stats reporting `diskCacheHits=1`.
+- Whole-build reconstruction is still unreliable though: this is now stronger evidence that some individual multi-slice files and small matching batches can be rebuilt correctly, and that repeated workflows can be made more downloader-like with local cache reuse, but the repo still does not implement full installer/update orchestration.
 
 ### Current blocker frontier
 

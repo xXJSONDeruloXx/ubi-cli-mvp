@@ -81,3 +81,5 @@ Exit criteria:
 - 2026-03-23: Fixed `extract-file` for live multi-slice files whose parsed `sliceList[].fileOffset` values materialize as protobuf default zeroes; the extractor now falls back to sequential offsets in that case and validates decompressed slice SHA-1 values against manifest `slices[]` hashes.
 - 2026-03-23: Added `extract-files` for experimental batch reconstruction of multiple matching live manifest files, sharing slice downloads across the batch when possible.
 - 2026-03-23: Added normalized manifest-path matching helpers and `files --match/--prefix` filtering so live manifests can be narrowed down before extraction.
+- 2026-03-23: Added persistent local slice-cache reuse for raw-slice download and extraction flows, reducing repeated `extract-file` network bytes to zero on cache hits.
+- 2026-03-23: Added path-filtered `download-plan --match/--prefix` support so live/public manifest plans can be scoped to a subset of files even before true chunk-selection logic exists.

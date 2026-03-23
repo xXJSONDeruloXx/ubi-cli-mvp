@@ -47,7 +47,7 @@ Current modules:
 - `library-service.ts`: owned titles via GraphQL plus normalization/deduping helpers; this remains the default user-facing list path.[6][9][19]
 - `search-service.ts`: merge owned-library matches with public catalog matches to disambiguate product IDs, editions, and DLC-like entries.[12][14][15]
 - `product-service.ts`: resolve a product by ID/name and hydrate metadata from live or public sources.[4][14][15]
-- `demux-service.ts`: normalize live Demux ownership rows, reconcile them against public/catalog identifiers, obtain ownership tokens, request signed download-service URLs, derive slice paths, optionally download raw slice blobs for inspection, and experimentally reconstruct individual files from manifest slice metadata.[4][5][19][20]
+- `demux-service.ts`: normalize live Demux ownership rows, reconcile them against public/catalog identifiers, obtain ownership tokens, request signed download-service URLs, derive slice paths, optionally download raw slice blobs for inspection, persist/reuse raw slice cache entries, and experimentally reconstruct individual files or small matching file batches from manifest slice metadata.[4][5][19][20]
 - `addon-service.ts`: expose public associated products from the catalog graph for DLC exploration, without claiming ownership.[12][19]
 - `manifest-service.ts`: fetch/parse manifests from public fixtures by default and from live Demux/download-service URLs when requested, deriving dry-run file/size summaries from either source.[3][5][13][17][18][19]
 - `public-catalog-service.ts`: fetch/cache `UplayManifests` datasets and build searchable config/title indexes.[11][12][13][14][15]
@@ -67,6 +67,8 @@ Current key types:
 - `DemuxDownloadUrlsInfo`
 - `DemuxSliceUrlsInfo`
 - `DemuxSliceDownloadResult`
+- `DemuxExtractedFileResult`
+- `DemuxExtractedFilesResult`
 - `AddonInfo`
 - `ManifestInfo`
 - `DownloadPlan`
@@ -83,6 +85,7 @@ Current modules include:
 - `errors.ts`
 - `matching.ts`
 - `demux-slices.ts`
+- `manifest-paths.ts`
 
 ## Data flow
 
@@ -141,16 +144,18 @@ Current modules include:
 
 1. Derive signed slice URLs from the current owned manifest.
 2. Fetch raw slice blobs to disk.
-3. Store them under a local output directory for inspection.
-4. Explicitly stop short of reconstructing final installed game files.
+3. Persist each raw slice under the local cache directory by slice hash when cache paths are available.
+4. Reuse cached slice blobs on later runs when the same slice hash is requested again.
+5. Explicitly stop short of reconstructing final installed game files.
 
 ### `ubi extract-file <query> <manifest-path>`
 
 1. Parse the live owned manifest.
 2. Resolve one exact manifest file path from the parsed file table.
 3. Request signed URLs for just that file's needed slices.
-4. Download each slice, decompress known zstd-framed slice payloads, and write them at the manifest-declared file offsets.
-5. Produce one experimental reconstructed file on disk without claiming full installer/update-engine support.
+4. Reuse cached raw slices when available; otherwise fetch them and add them to the local cache.
+5. Decompress known zstd-framed slice payloads and write them at the manifest-declared offsets, with a sequential-offset fallback for all-zero protobuf-default offset lists.
+6. Produce one experimental reconstructed file on disk without claiming full installer/update-engine support.
 
 ### Public/fallback manifest path
 
@@ -188,6 +193,7 @@ Files:
 - `config.json`: non-secret settings such as app IDs, verbosity defaults, and cache settings
 - `session.json`: persisted session metadata and tickets (redacted in logs)
 - `cache/*.json`: cached public dataset snapshots from `UplayManifests`
+- `cache/demux-slices/*.slice`: cached raw Demux slice payloads keyed by slice hash
 - `debug/*`: optional raw manifest and Demux-related artifacts written during inspection flows
 
 ## Current blocker frontier
