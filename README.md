@@ -139,6 +139,7 @@ node dist/index.js demux-info 3539
 node dist/index.js manifest 720
 node dist/index.js manifest 46 --json
 node dist/index.js manifest 3539 --live
+node dist/index.js manifest 3539 --live --with-assets
 ```
 
 ### 8. Inspect manifest file contents and a dry-run download plan
@@ -192,6 +193,10 @@ The current MVP can return a dry-run install/download summary from a **live** De
 
 The current MVP can download **raw slice blobs** for an owned live build to disk after deriving slice paths from the parsed live manifest and requesting signed slice URLs from `download_service`.[3][5][19]
 
+### `ubi extract-file 3539 'Support\Readme\English\Readme.txt'`
+
+The current MVP can experimentally reconstruct at least some individual files from live slice payloads by downloading the file's required slices, decompressing them, and writing them at the manifest-declared offsets. This has been live-validated on a one-slice Origins readme file, but it is not yet a general-purpose installer/update path.[19]
+
 ## Architecture overview
 
 The codebase is split into thin CLI commands, core auth/config/transport helpers, service-layer workflows, and normalized domain models.
@@ -221,8 +226,8 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 1. `ubi list` still uses the live GraphQL library endpoint rather than replacing it wholesale with Demux ownership output.[6][9][19]
 2. Public-catalog product IDs do not always align 1:1 with Demux ownership product IDs, so cross-surface reconciliation still needs implementation work.[4][14][19]
 3. Live Demux manifest inspection now works for owned products that expose a useful `latestManifest`, but not every entitlement row exposes one.[4][19]
-4. The CLI can now download **raw slice blobs** for owned live builds, but it still does **not** reconstruct those slices into full installed game files.[3][5][19]
-5. Public-catalog metadata and live download-service asset availability still vary by title; some tested products exposed a signed `.manifest` URL without separately exposed `.metadata`/`.licenses` URLs in practice.[5][19]
+4. The CLI can now parse live `.manifest`, `.metadata`, and `.licenses` assets, download raw slice blobs, and experimentally reconstruct some individual files from live slices, but it still does **not** reconstruct whole game installs.[3][5][19]
+5. Download-service asset and slice exposure still varies by title, entitlement row, and file path; the current implementation gracefully handles missing live `.metadata`/`.licenses` URLs, and `extract-file` remains experimental rather than universally reliable for every manifest path.[4][5][19]
 6. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
 
 ## Roadmap
@@ -232,3 +237,13 @@ See `docs/roadmap.md` for milestone tracking and the progress log.
 ## References
 
 All numbered citations resolve in `docs/references.md`.
+owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
+
+## Roadmap
+
+See `docs/roadmap.md` for milestone tracking and the progress log.
+
+## References
+
+All numbered citations resolve in `docs/references.md`.
+solve in `docs/references.md`.

@@ -52,7 +52,7 @@ npm run build
 Outcome:
 
 - `format:check`, `lint`, `typecheck`, and all tests passed.
-- Current automated test count: 29 tests across 16 test files.
+- Current automated test count: 33 tests across 16 test files.
 
 ### Auth / account
 
@@ -123,6 +123,7 @@ node dist/index.js demux-list --search origins
 node dist/index.js demux-info 3539
 node dist/index.js download-urls 3539
 node dist/index.js manifest 3539 --live
+node dist/index.js manifest 3539 --live --with-assets
 node dist/index.js files 3539 --live --limit 3
 node dist/index.js download-plan 3539 --live
 ```
@@ -133,8 +134,10 @@ Outcome:
 - `demux-info 3539` returned live Demux metadata including `latestManifest`, `gameCode: ACE`, branch `8751`, and many product associations
 - `download-urls 3539` returned live signed URLs for `.manifest`, `.metadata`, and `.licenses`, plus an ownership-token expiration timestamp
 - `manifest 3539 --live` returned `status: parsed-live-demux`
+- `manifest 3539 --live --with-assets` parsed live metadata and licenses too, surfacing `metadata.bytesOnDisk: 79647476759`, `metadata.bytesToDownload: 69428160597`, and `licenses.identifiers: denuvo_eula`
 - `files 3539 --live --limit 3` surfaced the largest live build files, led by `DataPC_ACE_Egypt_ext.forge`
 - `download-plan 3539 --live` returned `installBytes: 79647476759` and `downloadBytes: 69428160597` for the current owned build
+- `extract-file 3539 'Support\\Readme\\English\\Readme.txt'` reconstructed a live single-slice readme file whose output began with `Ubisoft Entertainment / Assassin's Creed® Origins v1.6.1`
 
 ### Demux validation commands
 
@@ -163,7 +166,7 @@ Observed results:
 - `ownership_service.initializeReq` returned 379 owned-game rows for the validated account
 - a live `ownershipTokenReq` succeeded for Demux product `3539`
 - `download_service.initializeReq` succeeded for that token
-- `urlReq` returned signed CDN URLs for live manifest assets; in the current CLI validation path, a signed `.manifest` URL was observed directly and some products may not expose `.metadata`/`.licenses` URLs in practice.[19]
+- `urlReq` returned signed CDN URLs for live manifest assets; in the current CLI validation path for product `3539`, signed `.manifest`, `.metadata`, and `.licenses` URLs were present as alternates under one manifest response row and were all fetched successfully.[19]
 
 Interpretation:
 
@@ -176,7 +179,7 @@ Interpretation:
 1. `ubi list` still relies on the public GraphQL library endpoint rather than replacing it wholesale with Demux ownership output.[6][9][19]
 2. Public-catalog product IDs do not always align 1:1 with Demux ownership product IDs, so cross-surface reconciliation still needs implementation work.[4][14][19]
 3. Live Demux manifest inspection works for owned products that expose a useful `latestManifest`, but not every entitlement row exposes one.[4][19]
-4. The CLI can fetch live signed manifest/metadata/licenses URLs, but it still does **not** download slice/chunk payloads and reconstruct full installed game files.[3][5][19]
+4. The CLI can fetch and parse live signed `.manifest`, `.metadata`, and `.licenses` assets and can also download raw slice payloads, but it still does **not** reconstruct those slices into full installed game files.[3][5][19]
 5. `ubi addons` currently exposes public associated products from the catalog graph; it does not prove add-on ownership for the authenticated account without Demux-backed ownership reconciliation.[4][12]
 6. A local `.env` file is supported for operator convenience, but blank override variables can interfere with runtime defaults if not normalized; this repo now trims blank values before applying overrides.
 
@@ -190,7 +193,6 @@ This repo currently demonstrates a **usable MVP** for:
 - source-backed product metadata lookup and public catalog disambiguation
 - public association-graph exploration for DLC-like products
 - reproducible manifest inspection, file listing, and dry-run download planning via public fixtures
-- validated and now exposed Demux transport/auth, ownership inspection, ownership-token retrieval, download-service URL retrieval, and live-manifest parsing for owned titles
+- validated and now exposed Demux transport/auth, ownership inspection, ownership-token retrieval, download-service URL retrieval, live `.manifest/.metadata/.licenses` parsing, slice-URL derivation, and raw-slice download flows for owned titles
 
 It does **not** yet implement chunk downloading/reconstruction or a full installer/update engine, but the remaining blocker is now post-manifest download orchestration rather than basic Demux connectivity.
-ining blocker is now post-manifest download orchestration rather than basic Demux connectivity.

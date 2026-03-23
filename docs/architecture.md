@@ -47,7 +47,7 @@ Current modules:
 - `library-service.ts`: owned titles via GraphQL plus normalization/deduping helpers; this remains the default user-facing list path.[6][9][19]
 - `search-service.ts`: merge owned-library matches with public catalog matches to disambiguate product IDs, editions, and DLC-like entries.[12][14][15]
 - `product-service.ts`: resolve a product by ID/name and hydrate metadata from live or public sources.[4][14][15]
-- `demux-service.ts`: normalize live Demux ownership rows, reconcile them against public/catalog identifiers, obtain ownership tokens, request signed download-service URLs, derive slice paths, and optionally download raw slice blobs for inspection.[4][5][19][20]
+- `demux-service.ts`: normalize live Demux ownership rows, reconcile them against public/catalog identifiers, obtain ownership tokens, request signed download-service URLs, derive slice paths, optionally download raw slice blobs for inspection, and experimentally reconstruct individual files from manifest slice metadata.[4][5][19][20]
 - `addon-service.ts`: expose public associated products from the catalog graph for DLC exploration, without claiming ownership.[12][19]
 - `manifest-service.ts`: fetch/parse manifests from public fixtures by default and from live Demux/download-service URLs when requested, deriving dry-run file/size summaries from either source.[3][5][13][17][18][19]
 - `public-catalog-service.ts`: fetch/cache `UplayManifests` datasets and build searchable config/title indexes.[11][12][13][14][15]
@@ -123,6 +123,14 @@ Current modules include:
 4. Parse the manifest with the documented file parser approach.[3]
 5. Derive file lists and dry-run byte totals from the current owned build.[19]
 
+### `ubi manifest <query> --live --with-assets`
+
+1. Resolve an owned Demux product and request live asset URLs from `download_service`.[4][5]
+2. Extract `.manifest`, `.metadata`, and `.licenses` URLs even when Demux returns them as alternates under one manifest-path response row.[19]
+3. Fetch each available asset over HTTP.
+4. Parse the extra metadata/license payloads with the documented parser entrypoints.[3]
+5. Surface metadata byte totals and license identifiers/languages alongside the manifest summary.
+
 ### `ubi slice-urls <query>`
 
 1. Parse the live owned manifest.
@@ -135,6 +143,14 @@ Current modules include:
 2. Fetch raw slice blobs to disk.
 3. Store them under a local output directory for inspection.
 4. Explicitly stop short of reconstructing final installed game files.
+
+### `ubi extract-file <query> <manifest-path>`
+
+1. Parse the live owned manifest.
+2. Resolve one exact manifest file path from the parsed file table.
+3. Request signed URLs for just that file's needed slices.
+4. Download each slice, decompress known zstd-framed slice payloads, and write them at the manifest-declared file offsets.
+5. Produce one experimental reconstructed file on disk without claiming full installer/update-engine support.
 
 ### Public/fallback manifest path
 
@@ -182,5 +198,5 @@ The remaining frontier is the gap between **raw manifest/slice retrieval** and a
 
 - public/catalog product IDs do not always align 1:1 with Demux ownership product IDs
 - not every entitlement row exposes a usable `latestManifest`
-- raw slice blobs can now be downloaded, but file reconstruction/install-state handling is not yet implemented
-- update/resume/repair orchestration remains out of scope until slice assembly semantics are better understood or validated
+- individual file reconstruction is now possible for at least some files, but whole-install reconstruction/install-state handling is not yet implemented
+- update/resume/repair orchestration remains out of scope until slice availability and assembly semantics are better understood across more titles and multi-slice files

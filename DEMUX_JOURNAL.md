@@ -54,6 +54,31 @@ Completed after the breakthrough:
    - live-manifest service plumbing
    - slice path derivation and raw-slice download plumbing
 
+### Additional live finding
+
+- The Demux `download_service.urlReq` response can bundle signed `.manifest`, `.metadata`, and `.licenses` URLs as alternate URLs under a single manifest-path response row rather than always returning three distinct response rows.
+- After extracting those alternates explicitly, the repo successfully fetched and parsed live `.metadata` and `.licenses` assets for owned product `3539` (`Assassin's Creed® Origins`).
+- Live parsed asset summary for `3539`:
+  - metadata `bytesOnDisk: 79647476759`
+  - metadata `bytesToDownload: 69428160597`
+  - metadata `chunkCount: 58`
+  - licenses `licenseCount: 1`
+  - licenses identifier: `denuvo_eula`
+
+### Additional file-reconstruction finding
+
+- Downloaded slice blobs appear to be individually compressed payloads; a sampled Origins slice began with the zstd magic bytes `28 B5 2F FD` and decompressed successfully with Node's built-in zstd support.
+- The repo now experimentally reconstructs individual files by:
+  1. reading one file's `sliceList` from the live manifest,
+  2. downloading those slices,
+  3. decompressing zstd slice bodies,
+  4. writing them at the manifest-declared file offsets.
+- This worked live for at least one owned Origins file:
+  - `Support\Readme\English\Readme.txt`
+  - output size `15538`
+  - reconstructed content began with `Ubisoft Entertainment / Assassin's Creed® Origins v1.6.1`
+- Not every attempted multi-slice file has succeeded yet; one live attempt for `d3dcompiler_47.dll` failed because Demux did not return a URL for one expected slice path, so whole-build reconstruction is still not reliable.
+
 ### Current blocker frontier
 
 The main remaining blocker is no longer basic Demux connectivity.
