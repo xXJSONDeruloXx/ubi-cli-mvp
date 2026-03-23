@@ -18,8 +18,9 @@ import type {
 import type { ProductConfigSummary } from '../models/product';
 import { UserFacingError } from '../util/errors';
 import {
-  collectUniqueSlicePaths,
-  sliceTokenToRelativePath
+  collectUniqueSliceHexHashes,
+  sliceHexToCandidateRelativePaths,
+  sliceTokenToHex
 } from '../util/demux-slices';
 import { normalizeForMatch, scoreTitleMatch } from '../util/matching';
 import type { Logger } from '../util/logger';
@@ -110,6 +111,15 @@ function toNumber(value: unknown): number {
 
 function normalizeManifestPathForMatch(value: string): string {
   return value.replaceAll('\\', '/').toLowerCase();
+}
+
+function chunkArray<T>(items: T[], chunkSize: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+
+  return chunks;
 }
 
 export class DemuxService {
@@ -236,33 +246,103 @@ export class DemuxService {
     };
   }
 
+  private async resolveSliceUrlResponses(
+    session: Awaited<ReturnType<AuthService['ensureValidSession']>>,
+    productId: number,
+    sliceHexHashes: string[]
+  ): Promise<{
+    ownershipTokenExpiresAt?: string;
+    responsesByHash: Map<
+      string,
+      { relativePath: string; result: number; urls: string[] }
+    >;
+  }> {
+    const responses = [] as Array<{
+      relativePath: string;
+      result: number;
+      urls: string[];
+    }>;
+    let ownershipTokenExpiresAt: string | undefined;
+
+    for (const candidateChunk of chunkArray(
+      sliceHexHashes.flatMap((hash) => sliceHexToCandidateRelativePaths(hash)),
+      256
+    )) {
+      const result = await this.demuxClient.getDownloadUrlsForRelativePaths(
+        session,
+        productId,
+        candidateChunk
+      );
+      ownershipTokenExpiresAt =
+        result.ownershipTokenExpiresAt ?? ownershipTokenExpiresAt;
+      responses.push(...result.responses);
+    }
+
+    const resolved = new Map<
+      string,
+      { relativePath: string; result: number; urls: string[] }
+    >();
+    for (const response of responses) {
+      const hash = response.relativePath.split('/').at(-1)?.toUpperCase();
+      if (!hash) {
+        continue;
+      }
+
+      const existing = resolved.get(hash);
+      if (existing) {
+        existing.urls.push(...response.urls);
+        continue;
+      }
+
+      resolved.set(hash, {
+        relativePath: response.relativePath,
+        result: response.result,
+        urls: [...response.urls]
+      });
+    }
+
+    return {
+      ownershipTokenExpiresAt,
+      responsesByHash: resolved
+    };
+  }
+
   public async getSliceUrls(
     query: string,
     limit = 20
   ): Promise<DemuxSliceUrlsInfo> {
     const { download, parsed } = await this.parseLiveManifest(query);
-    const allSlicePaths = collectUniqueSlicePaths(
-      parsed as Parameters<typeof collectUniqueSlicePaths>[0]
+    const allSliceHashes = collectUniqueSliceHexHashes(
+      parsed as Parameters<typeof collectUniqueSliceHexHashes>[0]
     );
-    const requestedPaths = allSlicePaths.slice(0, limit);
+    const requestedHashes = allSliceHashes.slice(0, limit);
     const session = await this.authService.ensureValidSession();
-    const result = await this.demuxClient.getDownloadUrlsForRelativePaths(
-      session,
-      download.game.demuxProductId,
-      requestedPaths
-    );
+    const { ownershipTokenExpiresAt, responsesByHash } =
+      await this.resolveSliceUrlResponses(
+        session,
+        download.game.demuxProductId,
+        requestedHashes
+      );
+    const resolvedResponses = requestedHashes
+      .map((hash) => responsesByHash.get(hash))
+      .filter(
+        (
+          value
+        ): value is { relativePath: string; result: number; urls: string[] } =>
+          Boolean(value)
+      );
 
     return {
       title: download.game.title,
       demuxProductId: download.game.demuxProductId,
       publicProductId: download.game.publicProductId,
       manifestHash: download.manifestHash,
-      totalUniqueSliceCount: allSlicePaths.length,
-      requestedSliceCount: requestedPaths.length,
-      ownershipTokenExpiresAt: result.ownershipTokenExpiresAt,
-      urls: result.responses,
+      totalUniqueSliceCount: allSliceHashes.length,
+      requestedSliceCount: requestedHashes.length,
+      ownershipTokenExpiresAt,
+      urls: resolvedResponses,
       notes: [
-        'Slice URLs were derived from the parsed live manifest and requested from the Demux download service.'
+        'Slice URLs were derived from the parsed live manifest and requested from the Demux download service using per-slice candidate path resolution.'
       ]
     };
   }
@@ -362,22 +442,19 @@ export class DemuxService {
       );
     }
 
-    const relativePaths = [
+    const sliceHexHashes = [
       ...new Set(
         file.sliceList
           .map((slice) => slice.downloadSha1)
           .filter((value): value is string | Buffer => Boolean(value))
-          .map((value) => sliceTokenToRelativePath(value))
+          .map((value) => sliceTokenToHex(value))
       )
     ];
     const session = await this.authService.ensureValidSession();
-    const urlResult = await this.demuxClient.getDownloadUrlsForRelativePaths(
+    const { responsesByHash } = await this.resolveSliceUrlResponses(
       session,
       download.game.demuxProductId,
-      relativePaths
-    );
-    const responsesByPath = new Map(
-      urlResult.responses.map((entry) => [entry.relativePath, entry])
+      sliceHexHashes
     );
     const resolvedOutputPath =
       outputPath ??
@@ -404,16 +481,17 @@ export class DemuxService {
           );
         }
 
-        const relativePath = sliceTokenToRelativePath(slice.downloadSha1);
+        const sliceHash = sliceTokenToHex(slice.downloadSha1);
+        const responseEntry = responsesByHash.get(sliceHash);
+        if (!responseEntry) {
+          throw new Error(
+            `Demux download service did not return a URL for slice ${sliceHash}.`
+          );
+        }
+
+        const relativePath = responseEntry.relativePath;
         let decompressedBody = decompressedByPath.get(relativePath);
         if (!decompressedBody) {
-          const responseEntry = responsesByPath.get(relativePath);
-          if (!responseEntry) {
-            throw new Error(
-              `Demux download service did not return a URL for slice ${relativePath}.`
-            );
-          }
-
           let compressedBody: Buffer | undefined;
           let lastStatus: number | undefined;
           for (const url of responseEntry.urls) {

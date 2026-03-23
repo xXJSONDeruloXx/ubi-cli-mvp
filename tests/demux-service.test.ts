@@ -154,11 +154,19 @@ describe('demux service', () => {
         ) =>
           Promise.resolve({
             ownershipTokenExpiresAt: '1774300461',
-            responses: relativePaths.map((relativePath) => ({
-              result: 0,
-              relativePath,
-              urls: [`https://example.test/${relativePath}`]
-            }))
+            responses: relativePaths
+              .filter(
+                (relativePath) =>
+                  relativePath ===
+                    'slices_v3/e/8E5F678ECDBBA7EF59483BABB9A6282196C8A90E' ||
+                  relativePath ===
+                    'slices_v3/a/2A10574931F301B504468475F22D010EE80344D4'
+              )
+              .map((relativePath) => ({
+                result: 0,
+                relativePath,
+                urls: [`https://example.test/${relativePath}`]
+              }))
           })
       } as never,
       {

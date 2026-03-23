@@ -170,6 +170,80 @@ function findAssetUrl(
   return undefined;
 }
 
+function extractRelativePathFromUrl(url: string): string | undefined {
+  const pathname = normalizeUrlPathname(url);
+  const marker = ['/manifests/', '/slices_v3/'].find((value) =>
+    pathname.includes(value)
+  );
+  if (!marker) {
+    return undefined;
+  }
+
+  return pathname.slice(pathname.indexOf(marker) + 1);
+}
+
+function normalizeDownloadUrlResponses(
+  rawResponses:
+    | Array<{
+        result?: number;
+        downloadUrls?: Array<{
+          urls?: string[];
+        }>;
+      }>
+    | undefined,
+  requestedPaths: string[]
+): DemuxDownloadUrlResult[] {
+  const grouped = new Map<string, DemuxDownloadUrlResult>();
+
+  for (const [index, response] of (rawResponses ?? []).entries()) {
+    const urls =
+      response.downloadUrls?.flatMap((downloadUrl) => downloadUrl.urls ?? []) ??
+      [];
+    let sawParsedRelativePath = false;
+
+    for (const url of urls) {
+      const relativePath = extractRelativePathFromUrl(url);
+      if (!relativePath) {
+        continue;
+      }
+
+      sawParsedRelativePath = true;
+      const existing = grouped.get(relativePath);
+      if (existing) {
+        existing.urls.push(url);
+        continue;
+      }
+
+      grouped.set(relativePath, {
+        result: response.result ?? -1,
+        relativePath,
+        urls: [url]
+      });
+    }
+
+    if (!sawParsedRelativePath) {
+      const fallbackRelativePath = requestedPaths[index] ?? '';
+      if (!fallbackRelativePath) {
+        continue;
+      }
+
+      const existing = grouped.get(fallbackRelativePath);
+      if (existing) {
+        existing.urls.push(...urls);
+        continue;
+      }
+
+      grouped.set(fallbackRelativePath, {
+        result: response.result ?? -1,
+        relativePath: fallbackRelativePath,
+        urls
+      });
+    }
+  }
+
+  return [...grouped.values()];
+}
+
 export class DemuxClient {
   private readonly moduleLoader: () => Promise<UbisoftDemuxModuleLike>;
   private demux?: UbisoftDemuxLike;
@@ -312,18 +386,10 @@ export class DemuxClient {
 
         return {
           ownershipTokenExpiresAt: token.expiration,
-          responses:
-            urlResponse.response?.urlRsp?.urlResponses?.map(
-              (response, index) => ({
-                result: response.result ?? -1,
-                relativePath:
-                  response.relativeFilePath ?? relativePaths[index] ?? '',
-                urls:
-                  response.downloadUrls?.flatMap(
-                    (downloadUrl) => downloadUrl.urls ?? []
-                  ) ?? []
-              })
-            ) ?? []
+          responses: normalizeDownloadUrlResponses(
+            urlResponse.response?.urlRsp?.urlResponses,
+            relativePaths
+          )
         };
       }
     );
