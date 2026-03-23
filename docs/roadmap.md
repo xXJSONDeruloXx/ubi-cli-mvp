@@ -71,3 +71,4 @@ Exit criteria:
 - 2026-03-23: Validated live auth (`login`, `logout`, `me`) against the public Ubisoft session/user endpoints.
 - 2026-03-23: Validated live GraphQL library listing for the test account and confirmed partial product-ID mapping through the public `UplayManifests` datasets.
 - 2026-03-23: Validated `info` and `manifest` flows using a mix of live resolution and public manifest fixtures; documented the blocked live Demux path in `docs/validation.md`.
+- 2026-03-23: Improved product-config parsing so localized config keys like `l1` resolve to readable titles and fallback game-code fields such as `achievements_sync_id` are surfaced in `ubi info`.

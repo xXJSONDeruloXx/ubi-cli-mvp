@@ -17,6 +17,27 @@ export interface ResolvedProduct {
   productConfigEntry?: ProductConfigEntry;
 }
 
+interface ParsedConfiguration {
+  version?: number;
+  root?: {
+    name?: string;
+    installer?: {
+      publisher?: string;
+      help_url?: string;
+    };
+    help_url?: string;
+    uplay?: {
+      game_code?: string;
+      achievements_sync_id?: string;
+    };
+  };
+  localizations?: {
+    default?: Record<string, string | null>;
+    'en-US'?: Record<string, string | null>;
+    'en-CA'?: Record<string, string | null>;
+  };
+}
+
 export class ProductService {
   public constructor(
     private readonly libraryService: LibraryService,
@@ -41,6 +62,9 @@ export class ProductService {
       const game = await this.publicCatalog.findGameByProductId(productId);
       const manifestHashes =
         await this.publicCatalog.findManifestsByProductId(productId);
+      const configSummary = this.getConfigSummary(
+        productConfigEntry?.Configuration
+      );
 
       if (
         !libraryItem &&
@@ -56,17 +80,14 @@ export class ProductService {
           query,
           title:
             libraryItem?.title ??
-            this.getConfigSummary(productConfigEntry?.Configuration)
-              ?.rootName ??
+            configSummary?.rootName ??
             `Product ${productId}`,
           productId,
           spaceId: libraryItem?.spaceId ?? productServiceEntry?.SpaceId,
           appId: libraryItem?.appId ?? productServiceEntry?.AppId,
           productType: libraryItem?.productType ?? game?.ProductType,
           manifestHashes,
-          configSummary: this.getConfigSummary(
-            productConfigEntry?.Configuration
-          ),
+          configSummary,
           hasRawConfiguration: Boolean(productConfigEntry?.Configuration),
           sources: {
             library: Boolean(libraryItem),
@@ -129,26 +150,37 @@ export class ProductService {
       return undefined;
     }
 
-    const parsed = YAML.parse(configuration) as {
-      version?: number;
-      root?: {
-        name?: string;
-        installer?: {
-          publisher?: string;
-          help_url?: string;
-        };
-        uplay?: {
-          game_code?: string;
-        };
-      };
-    };
+    const parsed = YAML.parse(configuration) as ParsedConfiguration;
+    const rootName = this.resolveLocalizedValue(parsed, parsed.root?.name);
 
     return {
-      rootName: parsed.root?.name,
+      rootName,
       publisher: parsed.root?.installer?.publisher,
-      helpUrl: parsed.root?.installer?.help_url,
-      gameCode: parsed.root?.uplay?.game_code,
+      helpUrl: parsed.root?.installer?.help_url ?? parsed.root?.help_url,
+      gameCode:
+        parsed.root?.uplay?.game_code ??
+        parsed.root?.uplay?.achievements_sync_id,
       configurationVersion: parsed.version
     };
+  }
+
+  private resolveLocalizedValue(
+    parsed: ParsedConfiguration,
+    value?: string
+  ): string | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    const localizedValue =
+      parsed.localizations?.default?.[value] ??
+      parsed.localizations?.['en-US']?.[value] ??
+      parsed.localizations?.['en-CA']?.[value];
+
+    if (typeof localizedValue === 'string' && localizedValue.length > 0) {
+      return localizedValue;
+    }
+
+    return value;
   }
 }
