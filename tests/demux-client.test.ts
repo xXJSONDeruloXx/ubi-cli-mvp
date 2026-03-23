@@ -291,4 +291,144 @@ describe('demux client', () => {
 
     await client.destroy();
   });
+
+  it('extracts metadata and licenses URLs when the download service returns them as alternates on the manifest response', async () => {
+    const moduleLoader = () =>
+      Promise.resolve({
+        UbisoftDemux: class {
+          public socket = {
+            push: () => Promise.resolve()
+          };
+
+          public basicRequest(payload: unknown) {
+            if (
+              typeof payload === 'object' &&
+              payload !== null &&
+              'getPatchInfoReq' in payload
+            ) {
+              return Promise.resolve({
+                getPatchInfoRsp: {
+                  success: true,
+                  latestVersion: 13099
+                }
+              });
+            }
+
+            return Promise.resolve({
+              authenticateRsp: {
+                success: true
+              }
+            });
+          }
+
+          public openConnection(
+            serviceName: 'ownership_service' | 'download_service'
+          ) {
+            if (serviceName === 'ownership_service') {
+              return Promise.resolve({
+                connectionId: 1,
+                request: (payload: unknown) => {
+                  if (
+                    typeof payload === 'object' &&
+                    payload !== null &&
+                    'request' in payload &&
+                    typeof payload.request === 'object' &&
+                    payload.request !== null &&
+                    'initializeReq' in payload.request
+                  ) {
+                    return Promise.resolve({
+                      response: {
+                        initializeRsp: {
+                          success: true,
+                          ownedGames: { ownedGames: [] }
+                        }
+                      }
+                    });
+                  }
+
+                  return Promise.resolve({
+                    response: {
+                      ownershipTokenRsp: {
+                        token: 'ownership-token',
+                        expiration: 1774299000
+                      }
+                    }
+                  });
+                }
+              });
+            }
+
+            return Promise.resolve({
+              connectionId: 2,
+              request: (payload: unknown) => {
+                if (
+                  typeof payload === 'object' &&
+                  payload !== null &&
+                  'request' in payload &&
+                  typeof payload.request === 'object' &&
+                  payload.request !== null &&
+                  'initializeReq' in payload.request
+                ) {
+                  return Promise.resolve({
+                    response: {
+                      initializeRsp: {
+                        ok: true
+                      }
+                    }
+                  });
+                }
+
+                return Promise.resolve({
+                  response: {
+                    urlRsp: {
+                      urlResponses: [
+                        {
+                          result: 0,
+                          relativeFilePath: 'manifests/hash.manifest',
+                          downloadUrls: [
+                            {
+                              urls: [
+                                'https://example.test/hash.manifest?token=1',
+                                'https://example.test/hash.metadata?token=2',
+                                'https://example.test/hash.licenses?token=3'
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                });
+              }
+            });
+          }
+
+          public destroy() {
+            return Promise.resolve();
+          }
+        }
+      });
+
+    const client = new DemuxClient(createConfig(), createLogger(), {
+      moduleLoader
+    });
+
+    const result = await client.getManifestAssetUrls(
+      {
+        ticket: 'ticket',
+        sessionId: 'session',
+        userId: 'user'
+      },
+      3539,
+      'hash'
+    );
+
+    expect(result).toMatchObject({
+      manifestUrl: 'https://example.test/hash.manifest?token=1',
+      metadataUrl: 'https://example.test/hash.metadata?token=2',
+      licensesUrl: 'https://example.test/hash.licenses?token=3'
+    });
+
+    await client.destroy();
+  });
 });

@@ -1,9 +1,9 @@
 interface ParsedManifestLike {
   chunks?: Array<{
     files?: Array<{
-      slices?: string[];
+      slices?: Array<string | Buffer>;
       sliceList?: Array<{
-        downloadSha1?: string;
+        downloadSha1?: string | Buffer;
       }>;
     }>;
   }>;
@@ -55,11 +55,17 @@ export function fileHashToPathChar(hash: string): string {
   return base32Def[offset + halfOffset] ?? '0';
 }
 
-export function sliceTokenToHex(sliceToken: string): string {
-  return Buffer.from(sliceToken, 'base64').toString('hex').toUpperCase();
+export function sliceTokenToHex(sliceToken: string | Buffer): string {
+  return (
+    typeof sliceToken === 'string'
+      ? Buffer.from(sliceToken, 'base64')
+      : Buffer.from(sliceToken)
+  )
+    .toString('hex')
+    .toUpperCase();
 }
 
-export function sliceTokenToRelativePath(sliceToken: string): string {
+export function sliceTokenToRelativePath(sliceToken: string | Buffer): string {
   const hexHash = sliceTokenToHex(sliceToken);
   return `slices_v3/${fileHashToPathChar(hexHash)}/${hexHash}`;
 }
@@ -72,7 +78,7 @@ export function collectUniqueSlicePaths(
     (chunk.files ?? []).flatMap((file) => {
       const downloadSha1Values = (file.sliceList ?? [])
         .map((slice) => slice.downloadSha1)
-        .filter((value): value is string => Boolean(value));
+        .filter((value): value is string | Buffer => Boolean(value));
 
       return downloadSha1Values.length > 0
         ? downloadSha1Values

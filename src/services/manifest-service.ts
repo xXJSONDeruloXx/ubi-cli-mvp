@@ -7,7 +7,9 @@ import type {
   DownloadPlan,
   ManifestFileEntry,
   ManifestInfo,
-  ParsedManifestSummary
+  ParsedLicensesSummary,
+  ParsedManifestSummary,
+  ParsedMetadataSummary
 } from '../models/manifest';
 import type { Logger } from '../util/logger';
 import type { DemuxService } from './demux-service';
@@ -26,6 +28,8 @@ interface LoadedManifestSource {
   status: ManifestInfo['status'];
   notes: string[];
   parsed?: unknown;
+  parsedMetadata?: unknown;
+  parsedLicenses?: unknown;
 }
 
 function toBigInt(value: unknown): bigint {
@@ -102,6 +106,57 @@ export function summarizeParsedManifest(
   };
 }
 
+export function summarizeParsedMetadata(parsed: {
+  bytesOnDisk?: unknown;
+  bytesToDownload?: unknown;
+  licenses?: Array<unknown>;
+  chunks?: Array<unknown>;
+  languages?: Array<{ code?: string }>;
+  uplayIds?: number[];
+}): ParsedMetadataSummary {
+  return {
+    bytesOnDisk: toBigInt(parsed.bytesOnDisk).toString(),
+    bytesToDownload: toBigInt(parsed.bytesToDownload).toString(),
+    chunkCount: parsed.chunks?.length ?? 0,
+    licenseCount: parsed.licenses?.length ?? 0,
+    languageCodes: (parsed.languages ?? [])
+      .map((language) => language.code)
+      .filter((value): value is string => Boolean(value)),
+    uplayIds: [...new Set(parsed.uplayIds ?? [])].sort((a, b) => a - b)
+  };
+}
+
+export function summarizeParsedLicenses(parsed: {
+  licenses?: Array<{
+    identifier?: string;
+    locales?: Array<{ language?: string }>;
+  }>;
+}): ParsedLicensesSummary {
+  const licenses = parsed.licenses ?? [];
+  const languageCodes = [
+    ...new Set(
+      licenses.flatMap((license) =>
+        (license.locales ?? [])
+          .map((locale) => locale.language)
+          .filter((value): value is string => Boolean(value))
+      )
+    )
+  ].sort((a, b) => a.localeCompare(b));
+
+  return {
+    licenseCount: licenses.length,
+    localeCount: licenses.reduce(
+      (sum, license) => sum + (license.locales?.length ?? 0),
+      0
+    ),
+    identifiers: licenses
+      .map((license) => license.identifier)
+      .filter((value): value is string => Boolean(value))
+      .sort((a, b) => a.localeCompare(b)),
+    languageCodes
+  };
+}
+
 export function toManifestFiles(parsed: {
   chunks?: Array<{
     files?: Array<{
@@ -153,8 +208,11 @@ export class ManifestService {
     return this.toManifestInfo(await this.loadPublicManifestFixture(query));
   }
 
-  public async getLiveManifestInfo(query: string): Promise<ManifestInfo> {
-    return this.toManifestInfo(await this.loadLiveManifest(query));
+  public async getLiveManifestInfo(
+    query: string,
+    options: { includeAssetDetails?: boolean } = {}
+  ): Promise<ManifestInfo> {
+    return this.toManifestInfo(await this.loadLiveManifest(query, options));
   }
 
   public async getManifestFiles(query: string): Promise<ManifestFileEntry[]> {
@@ -204,6 +262,20 @@ export class ManifestService {
         loaded.parsed as Parameters<typeof summarizeParsedManifest>[0],
         loaded.selectedManifestHash
       ),
+      parsedMetadata: loaded.parsedMetadata
+        ? summarizeParsedMetadata(
+            loaded.parsedMetadata as Parameters<
+              typeof summarizeParsedMetadata
+            >[0]
+          )
+        : undefined,
+      parsedLicenses: loaded.parsedLicenses
+        ? summarizeParsedLicenses(
+            loaded.parsedLicenses as Parameters<
+              typeof summarizeParsedLicenses
+            >[0]
+          )
+        : undefined,
       rawFixtureUrl: loaded.rawFixtureUrl,
       rawSourceUrl: loaded.rawSourceUrl,
       metadataUrl: loaded.metadataUrl,
@@ -241,12 +313,18 @@ export class ManifestService {
     };
   }
 
-  private async loadLiveManifest(query: string): Promise<LoadedManifestSource> {
+  private async loadLiveManifest(
+    query: string,
+    options: { includeAssetDetails?: boolean } = {}
+  ): Promise<LoadedManifestSource> {
     if (!this.demuxService) {
       throw new Error('Live Demux manifest support was not configured.');
     }
 
-    const liveManifest = await this.demuxService.parseLiveManifest(query);
+    const liveManifest = await this.demuxService.parseLiveManifest(
+      query,
+      options
+    );
     return {
       title: liveManifest.download.game.title,
       productId:
@@ -259,9 +337,12 @@ export class ManifestService {
       licensesUrl: liveManifest.download.licensesUrl,
       status: 'parsed-live-demux',
       notes: [
-        'Manifest data came from a live Demux download-service URL for an owned product.'
+        'Manifest data came from a live Demux download-service URL for an owned product.',
+        ...liveManifest.download.notes
       ],
-      parsed: liveManifest.parsed
+      parsed: liveManifest.parsed,
+      parsedMetadata: liveManifest.parsedMetadata,
+      parsedLicenses: liveManifest.parsedLicenses
     };
   }
 

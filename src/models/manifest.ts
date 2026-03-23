@@ -19,12 +19,30 @@ export interface ParsedManifestSummary {
   downloadBytes?: string;
 }
 
+export interface ParsedMetadataSummary {
+  bytesOnDisk?: string;
+  bytesToDownload?: string;
+  chunkCount: number;
+  licenseCount: number;
+  languageCodes: string[];
+  uplayIds: number[];
+}
+
+export interface ParsedLicensesSummary {
+  licenseCount: number;
+  localeCount: number;
+  identifiers: string[];
+  languageCodes: string[];
+}
+
 export interface ManifestInfo {
   title: string;
   productId?: number;
   manifestHashes: string[];
   selectedManifestHash?: string;
   parsedManifest?: ParsedManifestSummary;
+  parsedMetadata?: ParsedMetadataSummary;
+  parsedLicenses?: ParsedLicensesSummary;
   rawFixtureUrl?: string;
   rawSourceUrl?: string;
   metadataUrl?: string;

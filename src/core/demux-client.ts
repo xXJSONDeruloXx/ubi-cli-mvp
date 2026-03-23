@@ -142,6 +142,34 @@ function expirationToString(
   return typeof value === 'number' ? String(value) : value.toString();
 }
 
+function normalizeUrlPathname(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url.split('?')[0] ?? url;
+  }
+}
+
+function findAssetUrl(
+  responses: DemuxDownloadUrlResult[],
+  suffix: '.manifest' | '.metadata' | '.licenses'
+): string | undefined {
+  for (const response of responses) {
+    const directMatch = response.urls.find((url) =>
+      normalizeUrlPathname(url).endsWith(suffix)
+    );
+    if (directMatch) {
+      return directMatch;
+    }
+
+    if (response.relativePath.endsWith(suffix) && response.urls[0]) {
+      return response.urls[0];
+    }
+  }
+
+  return undefined;
+}
+
 export class DemuxClient {
   private readonly moduleLoader: () => Promise<UbisoftDemuxModuleLike>;
   private demux?: UbisoftDemuxLike;
@@ -317,15 +345,9 @@ export class DemuxClient {
     );
 
     return {
-      manifestUrl: result.responses.find((entry) =>
-        entry.relativePath.endsWith('.manifest')
-      )?.urls[0],
-      metadataUrl: result.responses.find((entry) =>
-        entry.relativePath.endsWith('.metadata')
-      )?.urls[0],
-      licensesUrl: result.responses.find((entry) =>
-        entry.relativePath.endsWith('.licenses')
-      )?.urls[0],
+      manifestUrl: findAssetUrl(result.responses, '.manifest'),
+      metadataUrl: findAssetUrl(result.responses, '.metadata'),
+      licensesUrl: findAssetUrl(result.responses, '.licenses'),
       ownershipTokenExpiresAt: result.ownershipTokenExpiresAt,
       responses: result.responses
     };

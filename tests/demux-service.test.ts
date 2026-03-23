@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { zstdCompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { DemuxService } from '../src/services/demux-service';
 
@@ -276,5 +278,125 @@ describe('demux service', () => {
       downloadedCount: 1
     });
     expect(result.files[0]?.bytes).toBe(11);
+  });
+
+  it('experimentally reconstructs a manifest file by downloading and stitching decompressed slices', async () => {
+    const firstSliceCompressed = zstdCompressSync(Buffer.from('Hello '));
+    const secondSliceCompressed = zstdCompressSync(Buffer.from('World'));
+    const service = new DemuxService(
+      {
+        debugDir: '/tmp',
+        sessionFile: '/tmp/session.json'
+      } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined }),
+        debug: () => undefined
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'ticket',
+            sessionId: 'session',
+            userId: 'user'
+          })
+      } as never,
+      {
+        getDownloadUrlsForRelativePaths: (
+          _session: unknown,
+          _productId: number,
+          relativePaths: string[]
+        ) =>
+          Promise.resolve({
+            responses: relativePaths.map((relativePath) => ({
+              result: 0,
+              relativePath,
+              urls: [`https://example.test/${relativePath}`]
+            }))
+          })
+      } as never,
+      {
+        requestRaw: (url: string) =>
+          Promise.resolve({
+            status: 200,
+            body: url.includes('665A69EDD249A5DE013007219DFAE260C0053112')
+              ? firstSliceCompressed
+              : secondSliceCompressed
+          })
+      } as never
+    );
+
+    Object.assign(service as object, {
+      parseLiveManifest: () =>
+        Promise.resolve({
+          download: {
+            game: {
+              title: 'Far Cry® 3',
+              demuxProductId: 46,
+              publicProductId: 46
+            },
+            manifestHash: 'LIVEHASH'
+          },
+          parsed: {
+            chunks: [
+              {
+                files: [
+                  {
+                    name: 'bin/game.txt',
+                    size: 11,
+                    isDir: false,
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '665A69EDD249A5DE013007219DFAE260C0053112',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: 6
+                      },
+                      {
+                        downloadSha1: Buffer.from(
+                          '2A10574931F301B504468475F22D010EE80344D4',
+                          'hex'
+                        ),
+                        fileOffset: 6,
+                        size: 5
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        })
+    });
+
+    const result = await service.extractFile(
+      '46',
+      'bin/game.txt',
+      '/tmp/ubi-extract-test/game.txt'
+    );
+    const reconstructed = await readFile(
+      '/tmp/ubi-extract-test/game.txt',
+      'utf8'
+    );
+
+    expect(result).toMatchObject({
+      title: 'Far Cry® 3',
+      demuxProductId: 46,
+      publicProductId: 46,
+      manifestHash: 'LIVEHASH',
+      manifestPath: 'bin/game.txt',
+      outputPath: '/tmp/ubi-extract-test/game.txt',
+      sliceCount: 2,
+      bytesWritten: 11
+    });
+    expect(reconstructed).toBe('Hello World');
   });
 });

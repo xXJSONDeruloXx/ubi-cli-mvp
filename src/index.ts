@@ -12,6 +12,7 @@ import { registerDownloadSlicesCommand } from './cli/download-slices';
 import { registerDownloadUrlsCommand } from './cli/download-urls';
 import { registerDemuxInfoCommand } from './cli/demux-info';
 import { registerDemuxListCommand } from './cli/demux-list';
+import { registerExtractFileCommand } from './cli/extract-file';
 import { registerFilesCommand } from './cli/files';
 import { registerInfoCommand } from './cli/info';
 import { registerListCommand } from './cli/list';
@@ -45,6 +46,7 @@ async function main(): Promise<void> {
   registerDownloadUrlsCommand(program, makeContext);
   registerSliceUrlsCommand(program, makeContext);
   registerDownloadSlicesCommand(program, makeContext);
+  registerExtractFileCommand(program, makeContext);
   registerAddonsCommand(program, makeContext);
   registerDoctorCommand(program, makeContext);
   registerConfigCommand(program, makeContext);

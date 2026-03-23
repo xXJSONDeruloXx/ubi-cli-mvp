@@ -3,7 +3,9 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadUbisoftDemuxModule } from '../src/core/ubisoft-demux-loader';
 import {
+  summarizeParsedLicenses,
   summarizeParsedManifest,
+  summarizeParsedMetadata,
   toManifestFiles
 } from '../src/services/manifest-service';
 
@@ -33,6 +35,44 @@ describe('manifest summary helpers', () => {
       downloadBytes: '3149129292',
       sliceCount: 3335,
       isDirectory: false
+    });
+  });
+
+  it('summarizes parsed metadata and licenses', () => {
+    const metadata = summarizeParsedMetadata({
+      bytesOnDisk: '42',
+      bytesToDownload: 24,
+      licenses: [{}, {}],
+      chunks: [{}, {}, {}],
+      languages: [{ code: 'en-US' }, { code: 'fr-FR' }],
+      uplayIds: [200, 100, 200]
+    });
+    const licenses = summarizeParsedLicenses({
+      licenses: [
+        {
+          identifier: 'eula',
+          locales: [{ language: 'en-US' }, { language: 'fr-FR' }]
+        },
+        {
+          identifier: 'privacy',
+          locales: [{ language: 'en-US' }]
+        }
+      ]
+    });
+
+    expect(metadata).toEqual({
+      bytesOnDisk: '42',
+      bytesToDownload: '24',
+      chunkCount: 3,
+      licenseCount: 2,
+      languageCodes: ['en-US', 'fr-FR'],
+      uplayIds: [100, 200]
+    });
+    expect(licenses).toEqual({
+      licenseCount: 2,
+      localeCount: 3,
+      identifiers: ['eula', 'privacy'],
+      languageCodes: ['en-US', 'fr-FR']
     });
   });
 });

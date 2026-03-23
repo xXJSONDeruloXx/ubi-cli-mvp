@@ -12,6 +12,23 @@ import { DemuxService } from '../services/demux-service';
 import type { CliContext } from './context';
 
 function renderHuman(info: ManifestInfo): string {
+  const parsedLanguages =
+    info.parsedManifest && info.parsedManifest.languageCodes.length > 0
+      ? info.parsedManifest.languageCodes.join(', ')
+      : '(none)';
+  const metadataLanguages =
+    info.parsedMetadata && info.parsedMetadata.languageCodes.length > 0
+      ? info.parsedMetadata.languageCodes.join(', ')
+      : '(none)';
+  const licenseLanguages =
+    info.parsedLicenses && info.parsedLicenses.languageCodes.length > 0
+      ? info.parsedLicenses.languageCodes.join(', ')
+      : '(none)';
+  const licenseIdentifiers =
+    info.parsedLicenses && info.parsedLicenses.identifiers.length > 0
+      ? info.parsedLicenses.identifiers.join(', ')
+      : '(none)';
+
   return [
     `title: ${info.title}`,
     `productId: ${info.productId ?? 'unknown'}`,
@@ -24,7 +41,16 @@ function renderHuman(info: ManifestInfo): string {
     `parsed.fileCount: ${info.parsedManifest?.fileCount ?? '(unknown)'}`,
     `parsed.installBytes: ${info.parsedManifest?.installBytes ?? '(unknown)'}`,
     `parsed.downloadBytes: ${info.parsedManifest?.downloadBytes ?? '(unknown)'}`,
-    `parsed.languages: ${info.parsedManifest?.languageCodes.join(', ') ?? '(unknown)'}`,
+    `parsed.languages: ${parsedLanguages}`,
+    `metadata.bytesOnDisk: ${info.parsedMetadata?.bytesOnDisk ?? '(unknown)'}`,
+    `metadata.bytesToDownload: ${info.parsedMetadata?.bytesToDownload ?? '(unknown)'}`,
+    `metadata.chunkCount: ${info.parsedMetadata?.chunkCount ?? '(unknown)'}`,
+    `metadata.licenseCount: ${info.parsedMetadata?.licenseCount ?? '(unknown)'}`,
+    `metadata.languages: ${metadataLanguages}`,
+    `licenses.licenseCount: ${info.parsedLicenses?.licenseCount ?? '(unknown)'}`,
+    `licenses.localeCount: ${info.parsedLicenses?.localeCount ?? '(unknown)'}`,
+    `licenses.languages: ${licenseLanguages}`,
+    `licenses.identifiers: ${licenseIdentifiers}`,
     `rawFixtureUrl: ${info.rawFixtureUrl ?? '(none)'}`,
     `rawSourceUrl: ${info.rawSourceUrl ?? '(none)'}`,
     `metadataUrl: ${info.metadataUrl ?? '(none)'}`,
@@ -95,16 +121,22 @@ export function registerManifestCommand(
       '--live',
       'Use live Demux/download-service retrieval instead of the public fixture path'
     )
+    .option(
+      '--with-assets',
+      'When used with --live, also fetch and parse live .metadata and .licenses assets if the download service exposes them'
+    )
     .action(
       async (
         titleOrId: string,
-        options: { json?: boolean; live?: boolean }
+        options: { json?: boolean; live?: boolean; withAssets?: boolean }
       ) => {
         const context = await makeContext();
         const manifestService = buildManifestService(context);
         try {
           const info = options.live
-            ? await manifestService.getLiveManifestInfo(titleOrId)
+            ? await manifestService.getLiveManifestInfo(titleOrId, {
+                includeAssetDetails: options.withAssets
+              })
             : await manifestService.getManifestInfo(titleOrId);
 
           if (options.json) {

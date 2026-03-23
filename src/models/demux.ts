@@ -37,6 +37,9 @@ export interface DemuxDownloadUrlsInfo {
   publicProductId?: number;
   manifestHash: string;
   ownershipTokenExpiresAt?: string;
+  manifestUrl?: string;
+  metadataUrl?: string;
+  licensesUrl?: string;
   urls: DemuxDownloadUrl[];
   notes: string[];
 }
@@ -71,6 +74,19 @@ export interface DemuxSliceDownloadResult {
   notes: string[];
 }
 
+export interface DemuxExtractedFileResult {
+  title: string;
+  demuxProductId: number;
+  publicProductId?: number;
+  manifestHash: string;
+  manifestPath: string;
+  outputPath: string;
+  sliceCount: number;
+  bytesDownloaded: number;
+  bytesWritten: number;
+  notes: string[];
+}
+
 export interface LiveManifestDownload {
   game: DemuxOwnedGame;
   manifestHash: string;
@@ -78,4 +94,7 @@ export interface LiveManifestDownload {
   metadataUrl?: string;
   licensesUrl?: string;
   body: Buffer;
+  metadataBody?: Buffer;
+  licensesBody?: Buffer;
+  notes: string[];
 }

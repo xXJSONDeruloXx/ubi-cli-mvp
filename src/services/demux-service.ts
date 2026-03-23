@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, open, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
 import { AuthService } from '../core/auth-service';
@@ -6,8 +6,10 @@ import { DemuxClient } from '../core/demux-client';
 import { HttpClient } from '../core/http';
 import { loadUbisoftDemuxModule } from '../core/ubisoft-demux-loader';
 import type { AppPaths, RuntimeConfig } from '../models/config';
+import { zstdDecompressSync } from 'node:zlib';
 import type {
   DemuxDownloadUrlsInfo,
+  DemuxExtractedFileResult,
   DemuxOwnedGame,
   DemuxSliceDownloadResult,
   DemuxSliceUrlsInfo,
@@ -15,7 +17,10 @@ import type {
 } from '../models/demux';
 import type { ProductConfigSummary } from '../models/product';
 import { UserFacingError } from '../util/errors';
-import { collectUniqueSlicePaths } from '../util/demux-slices';
+import {
+  collectUniqueSlicePaths,
+  sliceTokenToRelativePath
+} from '../util/demux-slices';
 import { normalizeForMatch, scoreTitleMatch } from '../util/matching';
 import type { Logger } from '../util/logger';
 import type { ProductService } from './product-service';
@@ -58,6 +63,53 @@ interface ParsedConfiguration {
     'en-US'?: Record<string, string | null>;
     'en-CA'?: Record<string, string | null>;
   };
+}
+
+interface ParseLiveManifestOptions {
+  includeAssetDetails?: boolean;
+}
+
+interface ParsedManifestSliceEntry {
+  downloadSha1?: string | Buffer;
+  fileOffset?: unknown;
+  size?: unknown;
+}
+
+interface ParsedManifestFileEntry {
+  name?: string;
+  size?: unknown;
+  isDir?: boolean;
+  sliceList?: ParsedManifestSliceEntry[];
+}
+
+function toNumber(value: unknown): number {
+  if (typeof value === 'number') {
+    return value;
+  }
+
+  if (typeof value === 'bigint') {
+    return Number(value);
+  }
+
+  if (typeof value === 'string' && /^\d+$/.test(value)) {
+    return Number(value);
+  }
+
+  if (typeof value === 'object' && value !== null) {
+    const maybeStringifiable = value as { toString?: () => string };
+    if (typeof maybeStringifiable.toString === 'function') {
+      const rendered = maybeStringifiable.toString();
+      if (/^\d+$/.test(rendered)) {
+        return Number(rendered);
+      }
+    }
+  }
+
+  return 0;
+}
+
+function normalizeManifestPathForMatch(value: string): string {
+  return value.replaceAll('\\', '/').toLowerCase();
 }
 
 export class DemuxService {
@@ -174,6 +226,9 @@ export class DemuxService {
       publicProductId: game.publicProductId,
       manifestHash,
       ownershipTokenExpiresAt: result.ownershipTokenExpiresAt,
+      manifestUrl: result.manifestUrl,
+      metadataUrl: result.metadataUrl,
+      licensesUrl: result.licensesUrl,
       urls: result.responses,
       notes: [
         'Signed URLs came from the live Demux download service using an ownership token for this entitled product.'
@@ -277,14 +332,155 @@ export class DemuxService {
     };
   }
 
+  public async extractFile(
+    query: string,
+    manifestPath: string,
+    outputPath?: string
+  ): Promise<DemuxExtractedFileResult> {
+    const { download, parsed } = await this.parseLiveManifest(query);
+    const files =
+      (
+        parsed as { chunks?: Array<{ files?: ParsedManifestFileEntry[] }> }
+      ).chunks?.flatMap((chunk) => chunk.files ?? []) ?? [];
+    const normalizedManifestPath = normalizeManifestPathForMatch(manifestPath);
+    const file = files.find(
+      (entry) =>
+        !entry.isDir &&
+        typeof entry.name === 'string' &&
+        normalizeManifestPathForMatch(entry.name) === normalizedManifestPath
+    );
+
+    if (!file?.name) {
+      throw new UserFacingError(
+        `No live manifest file matched "${manifestPath}" for ${download.game.title}.`
+      );
+    }
+
+    if (!file.sliceList || file.sliceList.length === 0) {
+      throw new UserFacingError(
+        `Manifest file "${file.name}" did not expose slice metadata for extraction.`
+      );
+    }
+
+    const relativePaths = [
+      ...new Set(
+        file.sliceList
+          .map((slice) => slice.downloadSha1)
+          .filter((value): value is string | Buffer => Boolean(value))
+          .map((value) => sliceTokenToRelativePath(value))
+      )
+    ];
+    const session = await this.authService.ensureValidSession();
+    const urlResult = await this.demuxClient.getDownloadUrlsForRelativePaths(
+      session,
+      download.game.demuxProductId,
+      relativePaths
+    );
+    const responsesByPath = new Map(
+      urlResult.responses.map((entry) => [entry.relativePath, entry])
+    );
+    const resolvedOutputPath =
+      outputPath ??
+      path.join(
+        this.paths.debugDir,
+        'demux-files',
+        `${download.game.demuxProductId}_${download.manifestHash}`,
+        file.name.replaceAll('\\', path.sep)
+      );
+    await mkdir(path.dirname(resolvedOutputPath), { recursive: true });
+
+    const handle = await open(resolvedOutputPath, 'w');
+    const decompressedByPath = new Map<string, Buffer>();
+    let bytesDownloaded = 0;
+    let bytesWritten = 0;
+
+    try {
+      await handle.truncate(toNumber(file.size));
+
+      for (const slice of file.sliceList) {
+        if (!slice.downloadSha1) {
+          throw new Error(
+            `Manifest file "${file.name}" had a slice without downloadSha1.`
+          );
+        }
+
+        const relativePath = sliceTokenToRelativePath(slice.downloadSha1);
+        let decompressedBody = decompressedByPath.get(relativePath);
+        if (!decompressedBody) {
+          const responseEntry = responsesByPath.get(relativePath);
+          if (!responseEntry) {
+            throw new Error(
+              `Demux download service did not return a URL for slice ${relativePath}.`
+            );
+          }
+
+          let compressedBody: Buffer | undefined;
+          let lastStatus: number | undefined;
+          for (const url of responseEntry.urls) {
+            const response = await this.httpClient.requestRaw(url, {
+              retryCount: 0,
+              timeoutMs: 60000
+            });
+            lastStatus = response.status;
+            if (response.status === 200) {
+              compressedBody = Buffer.from(response.body);
+              bytesDownloaded += compressedBody.length;
+              break;
+            }
+          }
+
+          if (!compressedBody) {
+            throw new Error(
+              `Fetching slice ${relativePath} failed for all candidate URLs${lastStatus !== undefined ? ` (last HTTP ${lastStatus})` : ''}.`
+            );
+          }
+
+          decompressedBody = this.decompressSliceBody(compressedBody);
+          decompressedByPath.set(relativePath, decompressedBody);
+        }
+
+        const expectedSize = toNumber(slice.size);
+        if (expectedSize > 0 && decompressedBody.length !== expectedSize) {
+          throw new Error(
+            `Slice ${relativePath} decompressed to ${decompressedBody.length} bytes but manifest expected ${expectedSize}.`
+          );
+        }
+
+        await handle.write(
+          decompressedBody,
+          0,
+          decompressedBody.length,
+          toNumber(slice.fileOffset)
+        );
+        bytesWritten += decompressedBody.length;
+      }
+    } finally {
+      await handle.close();
+    }
+
+    return {
+      title: download.game.title,
+      demuxProductId: download.game.demuxProductId,
+      publicProductId: download.game.publicProductId,
+      manifestHash: download.manifestHash,
+      manifestPath: file.name,
+      outputPath: resolvedOutputPath,
+      sliceCount: file.sliceList.length,
+      bytesDownloaded,
+      bytesWritten,
+      notes: [
+        'This command experimentally reconstructs a single manifest file from live slice payloads. It is not a full installer/update engine yet.'
+      ]
+    };
+  }
+
   public async downloadLiveManifest(
-    query: string
+    query: string,
+    options: ParseLiveManifestOptions = {}
   ): Promise<LiveManifestDownload> {
     const game = await this.resolveOwnedGame(query);
     const urls = await this.getDownloadUrls(query);
-    const manifestUrl = urls.urls.find((entry) =>
-      entry.relativePath.endsWith('.manifest')
-    )?.urls[0];
+    const manifestUrl = urls.manifestUrl;
     if (!manifestUrl) {
       throw new UserFacingError(
         `Demux download service did not return a manifest URL for product ${game.demuxProductId}.`
@@ -307,33 +503,103 @@ export class DemuxService {
     );
     await writeFile(fixturePath, response.body);
 
+    const notes: string[] = [];
+    const metadataBody = options.includeAssetDetails
+      ? await this.fetchOptionalAssetBody(
+          urls.metadataUrl,
+          path.join(
+            this.paths.debugDir,
+            `demux_${game.demuxProductId}_${urls.manifestHash}.metadata`
+          ),
+          'metadata',
+          notes
+        )
+      : undefined;
+    const licensesBody = options.includeAssetDetails
+      ? await this.fetchOptionalAssetBody(
+          urls.licensesUrl,
+          path.join(
+            this.paths.debugDir,
+            `demux_${game.demuxProductId}_${urls.manifestHash}.licenses`
+          ),
+          'licenses',
+          notes
+        )
+      : undefined;
+
     return {
       game,
       manifestHash: urls.manifestHash,
       manifestUrl,
-      metadataUrl: urls.urls.find((entry) =>
-        entry.relativePath.endsWith('.metadata')
-      )?.urls[0],
-      licensesUrl: urls.urls.find((entry) =>
-        entry.relativePath.endsWith('.licenses')
-      )?.urls[0],
-      body: Buffer.from(response.body)
+      metadataUrl: urls.metadataUrl,
+      licensesUrl: urls.licensesUrl,
+      body: Buffer.from(response.body),
+      metadataBody,
+      licensesBody,
+      notes
     };
   }
 
-  public async parseLiveManifest(query: string): Promise<{
+  public async parseLiveManifest(
+    query: string,
+    options: ParseLiveManifestOptions = {}
+  ): Promise<{
     download: LiveManifestDownload;
     parsed: unknown;
+    parsedMetadata?: unknown;
+    parsedLicenses?: unknown;
   }> {
-    const download = await this.downloadLiveManifest(query);
+    const download = await this.downloadLiveManifest(query, options);
     const { UbisoftFileParser } = await loadUbisoftDemuxModule();
     const parser = new UbisoftFileParser();
     const parsed = parser.parseDownloadManifest(download.body);
 
     return {
       download,
-      parsed
+      parsed,
+      parsedMetadata: download.metadataBody
+        ? parser.parseDownloadMetadata(download.metadataBody)
+        : undefined,
+      parsedLicenses: download.licensesBody
+        ? parser.parseDownloadLicenses(download.licensesBody)
+        : undefined
     };
+  }
+
+  private decompressSliceBody(body: Buffer): Buffer {
+    const zstdMagic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
+    if (body.subarray(0, 4).equals(zstdMagic)) {
+      return Buffer.from(zstdDecompressSync(body));
+    }
+
+    return body;
+  }
+
+  private async fetchOptionalAssetBody(
+    url: string | undefined,
+    filePath: string,
+    label: 'metadata' | 'licenses',
+    notes: string[]
+  ): Promise<Buffer | undefined> {
+    if (!url) {
+      notes.push(`Live ${label} URL was not exposed for this manifest.`);
+      return undefined;
+    }
+
+    const response = await this.httpClient.requestRaw(url, {
+      retryCount: 0,
+      timeoutMs: 20000
+    });
+    if (response.status !== 200) {
+      notes.push(
+        `Fetching live ${label} bytes returned HTTP ${response.status}.`
+      );
+      return undefined;
+    }
+
+    const body = Buffer.from(response.body);
+    await writeFile(filePath, body);
+    return body;
   }
 
   public async getPatchInfo(): Promise<{
