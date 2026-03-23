@@ -525,4 +525,163 @@ describe('demux service', () => {
     expect(reconstructed).toBe('MZ-first-halfsecond-half');
     expect(result.notes[0]).toContain('Validated 2 decompressed slice SHA-1');
   });
+
+  it('extracts multiple matching files while reusing downloaded slice payloads across the batch', async () => {
+    const sharedSlice = Buffer.from('Shared-');
+    const uniqueSlice = Buffer.from('Unique');
+    const sharedSliceCompressed = zstdCompressSync(sharedSlice);
+    const uniqueSliceCompressed = zstdCompressSync(uniqueSlice);
+    let sharedFetchCount = 0;
+    const service = new DemuxService(
+      {
+        debugDir: '/tmp',
+        sessionFile: '/tmp/session.json'
+      } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined }),
+        debug: () => undefined
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'ticket',
+            sessionId: 'session',
+            userId: 'user'
+          })
+      } as never,
+      {
+        getDownloadUrlsForRelativePaths: (
+          _session: unknown,
+          _productId: number,
+          relativePaths: string[]
+        ) =>
+          Promise.resolve({
+            responses: relativePaths.map((relativePath) => ({
+              result: 0,
+              relativePath,
+              urls: [`https://example.test/${relativePath}`]
+            }))
+          })
+      } as never,
+      {
+        requestRaw: (url: string) => {
+          if (url.includes('665A69EDD249A5DE013007219DFAE260C0053112')) {
+            sharedFetchCount += 1;
+            return Promise.resolve({
+              status: 200,
+              body: sharedSliceCompressed
+            });
+          }
+
+          return Promise.resolve({
+            status: 200,
+            body: uniqueSliceCompressed
+          });
+        }
+      } as never
+    );
+
+    Object.assign(service as object, {
+      parseLiveManifest: () =>
+        Promise.resolve({
+          download: {
+            game: {
+              title: 'Far Cry® 3',
+              demuxProductId: 46,
+              publicProductId: 46
+            },
+            manifestHash: 'LIVEHASH'
+          },
+          parsed: {
+            chunks: [
+              {
+                files: [
+                  {
+                    name: 'bin/shared.txt',
+                    size: sharedSlice.length,
+                    isDir: false,
+                    slices: [
+                      createHash('sha1').update(sharedSlice).digest('base64')
+                    ],
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '665A69EDD249A5DE013007219DFAE260C0053112',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: sharedSlice.length
+                      }
+                    ]
+                  },
+                  {
+                    name: 'bin/shared-plus.txt',
+                    size: sharedSlice.length + uniqueSlice.length,
+                    isDir: false,
+                    slices: [
+                      createHash('sha1').update(sharedSlice).digest('base64'),
+                      createHash('sha1').update(uniqueSlice).digest('base64')
+                    ],
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '665A69EDD249A5DE013007219DFAE260C0053112',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: sharedSlice.length
+                      },
+                      {
+                        downloadSha1: Buffer.from(
+                          '2A10574931F301B504468475F22D010EE80344D4',
+                          'hex'
+                        ),
+                        fileOffset: sharedSlice.length,
+                        size: uniqueSlice.length
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        })
+    });
+
+    const result = await service.extractFiles('46', 'bin\\shared', {
+      limit: 5,
+      outputDir: '/tmp/ubi-extract-batch-test'
+    });
+    const sharedOutput = await readFile(
+      '/tmp/ubi-extract-batch-test/bin/shared.txt',
+      'utf8'
+    );
+    const sharedPlusOutput = await readFile(
+      '/tmp/ubi-extract-batch-test/bin/shared-plus.txt',
+      'utf8'
+    );
+
+    expect(sharedOutput).toBe('Shared-');
+    expect(sharedPlusOutput).toBe('Shared-Unique');
+    expect(sharedFetchCount).toBe(1);
+    expect(result).toMatchObject({
+      matchedCount: 2,
+      extractedCount: 2,
+      sliceReferenceCount: 3,
+      uniqueSliceCount: 2,
+      outputDir: '/tmp/ubi-extract-batch-test'
+    });
+    expect(result.files.map((file) => file.manifestPath).sort()).toEqual([
+      'bin/shared-plus.txt',
+      'bin/shared.txt'
+    ]);
+    expect(result.notes[1]).toContain('reuses downloaded slices');
+  });
 });

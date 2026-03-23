@@ -11,6 +11,7 @@ import { zstdDecompressSync } from 'node:zlib';
 import type {
   DemuxDownloadUrlsInfo,
   DemuxExtractedFileResult,
+  DemuxExtractedFilesResult,
   DemuxOwnedGame,
   DemuxSliceDownloadResult,
   DemuxSliceUrlsInfo,
@@ -85,6 +86,21 @@ interface ParsedManifestFileEntry {
   sliceList?: ParsedManifestSliceEntry[];
 }
 
+interface SliceResponseEntry {
+  relativePath: string;
+  result: number;
+  urls: string[];
+}
+
+interface ExtractionCache {
+  decompressedByPath: Map<string, Buffer>;
+}
+
+interface PreparedLiveManifestExtraction {
+  download: LiveManifestDownload;
+  files: ParsedManifestFileEntry[];
+}
+
 function toNumber(value: unknown): number {
   if (typeof value === 'number') {
     return value;
@@ -112,7 +128,7 @@ function toNumber(value: unknown): number {
 }
 
 function normalizeManifestPathForMatch(value: string): string {
-  return value.replaceAll('\\', '/').toLowerCase();
+  return value.replaceAll('\\', '/').replaceAll('//', '/').toLowerCase();
 }
 
 function sha1Base64(value: Buffer): string {
@@ -423,13 +439,9 @@ export class DemuxService {
     manifestPath: string,
     outputPath?: string
   ): Promise<DemuxExtractedFileResult> {
-    const { download, parsed } = await this.parseLiveManifest(query);
-    const files =
-      (
-        parsed as { chunks?: Array<{ files?: ParsedManifestFileEntry[] }> }
-      ).chunks?.flatMap((chunk) => chunk.files ?? []) ?? [];
+    const prepared = await this.prepareLiveManifestExtraction(query);
     const normalizedManifestPath = normalizeManifestPathForMatch(manifestPath);
-    const file = files.find(
+    const file = prepared.files.find(
       (entry) =>
         !entry.isDir &&
         typeof entry.name === 'string' &&
@@ -438,8 +450,244 @@ export class DemuxService {
 
     if (!file?.name) {
       throw new UserFacingError(
-        `No live manifest file matched "${manifestPath}" for ${download.game.title}.`
+        `No live manifest file matched "${manifestPath}" for ${prepared.download.game.title}.`
       );
+    }
+
+    const sliceHexHashes = this.collectSliceHexHashesForFiles([file]);
+    const session = await this.authService.ensureValidSession();
+    const { responsesByHash } = await this.resolveSliceUrlResponses(
+      session,
+      prepared.download.game.demuxProductId,
+      sliceHexHashes
+    );
+    const resolvedOutputPath =
+      outputPath ??
+      path.join(
+        this.paths.debugDir,
+        'demux-files',
+        `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`,
+        file.name.replaceAll('\\', path.sep)
+      );
+
+    const extracted = await this.extractManifestFileToPath(
+      file,
+      resolvedOutputPath,
+      responsesByHash,
+      { decompressedByPath: new Map<string, Buffer>() }
+    );
+
+    return {
+      title: prepared.download.game.title,
+      demuxProductId: prepared.download.game.demuxProductId,
+      publicProductId: prepared.download.game.publicProductId,
+      manifestHash: prepared.download.manifestHash,
+      manifestPath: file.name,
+      outputPath: resolvedOutputPath,
+      sliceCount: extracted.sliceCount,
+      bytesDownloaded: extracted.bytesDownloaded,
+      bytesWritten: extracted.bytesWritten,
+      notes: [
+        extracted.validatedSliceHashCount > 0
+          ? `Validated ${extracted.validatedSliceHashCount} decompressed slice SHA-1 values against manifest file hashes.`
+          : 'Manifest file did not expose per-slice decompressed SHA-1 hashes for validation.',
+        'This command experimentally reconstructs a single manifest file from live slice payloads. It is not a full installer/update engine yet.'
+      ]
+    };
+  }
+
+  public async extractFiles(
+    query: string,
+    pathFilter: string,
+    options: {
+      prefixMatch?: boolean;
+      limit?: number;
+      outputDir?: string;
+    } = {}
+  ): Promise<DemuxExtractedFilesResult> {
+    const prepared = await this.prepareLiveManifestExtraction(query);
+    const normalizedFilter = normalizeManifestPathForMatch(pathFilter);
+    const matchedFiles = prepared.files
+      .filter(
+        (entry) =>
+          !entry.isDir &&
+          typeof entry.name === 'string' &&
+          (options.prefixMatch
+            ? normalizeManifestPathForMatch(entry.name).startsWith(
+                normalizedFilter
+              )
+            : normalizeManifestPathForMatch(entry.name).includes(
+                normalizedFilter
+              ))
+      )
+      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+
+    if (matchedFiles.length === 0) {
+      throw new UserFacingError(
+        `No live manifest files matched "${pathFilter}" for ${prepared.download.game.title}.`
+      );
+    }
+
+    const limit = Math.max(1, options.limit ?? 10);
+    const selectedFiles = matchedFiles.slice(0, limit);
+    const sliceReferenceCount = selectedFiles.reduce(
+      (sum, file) => sum + (file.sliceList?.length ?? 0),
+      0
+    );
+    const uniqueSliceHashes = this.collectSliceHexHashesForFiles(selectedFiles);
+    const session = await this.authService.ensureValidSession();
+    const { responsesByHash } = await this.resolveSliceUrlResponses(
+      session,
+      prepared.download.game.demuxProductId,
+      uniqueSliceHashes
+    );
+    const resolvedOutputDir =
+      options.outputDir ??
+      path.join(
+        this.paths.debugDir,
+        'demux-files',
+        `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`
+      );
+    const cache: ExtractionCache = {
+      decompressedByPath: new Map<string, Buffer>()
+    };
+
+    let bytesDownloaded = 0;
+    let bytesWritten = 0;
+    const files: DemuxExtractedFilesResult['files'] = [];
+    for (const file of selectedFiles) {
+      if (!file.name) {
+        continue;
+      }
+
+      const resolvedOutputPath = path.join(
+        resolvedOutputDir,
+        file.name.replaceAll('\\', path.sep)
+      );
+      const extracted = await this.extractManifestFileToPath(
+        file,
+        resolvedOutputPath,
+        responsesByHash,
+        cache
+      );
+      bytesDownloaded += extracted.bytesDownloaded;
+      bytesWritten += extracted.bytesWritten;
+      files.push({
+        manifestPath: file.name,
+        outputPath: resolvedOutputPath,
+        sliceCount: extracted.sliceCount,
+        bytesWritten: extracted.bytesWritten
+      });
+    }
+
+    return {
+      title: prepared.download.game.title,
+      demuxProductId: prepared.download.game.demuxProductId,
+      publicProductId: prepared.download.game.publicProductId,
+      manifestHash: prepared.download.manifestHash,
+      outputDir: resolvedOutputDir,
+      matchedCount: matchedFiles.length,
+      extractedCount: files.length,
+      sliceReferenceCount,
+      uniqueSliceCount: uniqueSliceHashes.length,
+      bytesDownloaded,
+      bytesWritten,
+      files,
+      notes: [
+        options.prefixMatch
+          ? 'Matched files by normalized manifest-path prefix.'
+          : 'Matched files by normalized manifest-path substring.',
+        'This command experimentally reconstructs multiple manifest files from live slice payloads and reuses downloaded slices across matching files when possible.'
+      ]
+    };
+  }
+
+  private async prepareLiveManifestExtraction(
+    query: string
+  ): Promise<PreparedLiveManifestExtraction> {
+    const { download, parsed } = await this.parseLiveManifest(query);
+    return {
+      download,
+      files: this.getParsedManifestFiles(parsed)
+    };
+  }
+
+  private getParsedManifestFiles(parsed: unknown): ParsedManifestFileEntry[] {
+    return (
+      (
+        parsed as { chunks?: Array<{ files?: ParsedManifestFileEntry[] }> }
+      ).chunks?.flatMap((chunk) => chunk.files ?? []) ?? []
+    );
+  }
+
+  private collectSliceHexHashesForFiles(
+    files: ParsedManifestFileEntry[]
+  ): string[] {
+    return [
+      ...new Set(
+        files.flatMap((file) =>
+          (file.sliceList ?? [])
+            .map((slice) => slice.downloadSha1)
+            .filter((value): value is string | Buffer => Boolean(value))
+            .map((value) => sliceTokenToHex(value))
+        )
+      )
+    ];
+  }
+
+  private async fetchDecompressedSlice(
+    entry: SliceResponseEntry,
+    cache: ExtractionCache
+  ): Promise<{ body: Buffer; bytesDownloaded: number }> {
+    const cachedBody = cache.decompressedByPath.get(entry.relativePath);
+    if (cachedBody) {
+      return {
+        body: cachedBody,
+        bytesDownloaded: 0
+      };
+    }
+
+    let compressedBody: Buffer | undefined;
+    let lastStatus: number | undefined;
+    for (const url of entry.urls) {
+      const response = await this.httpClient.requestRaw(url, {
+        retryCount: 0,
+        timeoutMs: 60000
+      });
+      lastStatus = response.status;
+      if (response.status === 200) {
+        compressedBody = Buffer.from(response.body);
+        break;
+      }
+    }
+
+    if (!compressedBody) {
+      throw new Error(
+        `Fetching slice ${entry.relativePath} failed for all candidate URLs${lastStatus !== undefined ? ` (last HTTP ${lastStatus})` : ''}.`
+      );
+    }
+
+    const body = this.decompressSliceBody(compressedBody);
+    cache.decompressedByPath.set(entry.relativePath, body);
+    return {
+      body,
+      bytesDownloaded: compressedBody.length
+    };
+  }
+
+  private async extractManifestFileToPath(
+    file: ParsedManifestFileEntry,
+    outputPath: string,
+    responsesByHash: Map<string, SliceResponseEntry>,
+    cache: ExtractionCache
+  ): Promise<{
+    sliceCount: number;
+    bytesDownloaded: number;
+    bytesWritten: number;
+    validatedSliceHashCount: number;
+  }> {
+    if (!file.name) {
+      throw new Error('Manifest file entry was missing a name.');
     }
 
     if (!file.sliceList || file.sliceList.length === 0) {
@@ -448,32 +696,8 @@ export class DemuxService {
       );
     }
 
-    const sliceHexHashes = [
-      ...new Set(
-        file.sliceList
-          .map((slice) => slice.downloadSha1)
-          .filter((value): value is string | Buffer => Boolean(value))
-          .map((value) => sliceTokenToHex(value))
-      )
-    ];
-    const session = await this.authService.ensureValidSession();
-    const { responsesByHash } = await this.resolveSliceUrlResponses(
-      session,
-      download.game.demuxProductId,
-      sliceHexHashes
-    );
-    const resolvedOutputPath =
-      outputPath ??
-      path.join(
-        this.paths.debugDir,
-        'demux-files',
-        `${download.game.demuxProductId}_${download.manifestHash}`,
-        file.name.replaceAll('\\', path.sep)
-      );
-    await mkdir(path.dirname(resolvedOutputPath), { recursive: true });
-
-    const handle = await open(resolvedOutputPath, 'w');
-    const decompressedByPath = new Map<string, Buffer>();
+    await mkdir(path.dirname(outputPath), { recursive: true });
+    const handle = await open(outputPath, 'w');
     let bytesDownloaded = 0;
     let bytesWritten = 0;
     let nextImplicitOffset = 0;
@@ -500,38 +724,14 @@ export class DemuxService {
           );
         }
 
-        const relativePath = responseEntry.relativePath;
-        let decompressedBody = decompressedByPath.get(relativePath);
-        if (!decompressedBody) {
-          let compressedBody: Buffer | undefined;
-          let lastStatus: number | undefined;
-          for (const url of responseEntry.urls) {
-            const response = await this.httpClient.requestRaw(url, {
-              retryCount: 0,
-              timeoutMs: 60000
-            });
-            lastStatus = response.status;
-            if (response.status === 200) {
-              compressedBody = Buffer.from(response.body);
-              bytesDownloaded += compressedBody.length;
-              break;
-            }
-          }
-
-          if (!compressedBody) {
-            throw new Error(
-              `Fetching slice ${relativePath} failed for all candidate URLs${lastStatus !== undefined ? ` (last HTTP ${lastStatus})` : ''}.`
-            );
-          }
-
-          decompressedBody = this.decompressSliceBody(compressedBody);
-          decompressedByPath.set(relativePath, decompressedBody);
-        }
+        const fetched = await this.fetchDecompressedSlice(responseEntry, cache);
+        const decompressedBody = fetched.body;
+        bytesDownloaded += fetched.bytesDownloaded;
 
         const expectedSize = toNumber(slice.size);
         if (expectedSize > 0 && decompressedBody.length !== expectedSize) {
           throw new Error(
-            `Slice ${relativePath} decompressed to ${decompressedBody.length} bytes but manifest expected ${expectedSize}.`
+            `Slice ${responseEntry.relativePath} decompressed to ${decompressedBody.length} bytes but manifest expected ${expectedSize}.`
           );
         }
 
@@ -544,7 +744,7 @@ export class DemuxService {
           const actualBase64 = sha1Base64(decompressedBody);
           if (actualBase64 !== expectedBase64) {
             throw new Error(
-              `Slice ${relativePath} decompressed SHA-1 ${actualBase64} but manifest file slice expected ${expectedBase64}.`
+              `Slice ${responseEntry.relativePath} decompressed SHA-1 ${actualBase64} but manifest file slice expected ${expectedBase64}.`
             );
           }
 
@@ -570,21 +770,10 @@ export class DemuxService {
     }
 
     return {
-      title: download.game.title,
-      demuxProductId: download.game.demuxProductId,
-      publicProductId: download.game.publicProductId,
-      manifestHash: download.manifestHash,
-      manifestPath: file.name,
-      outputPath: resolvedOutputPath,
       sliceCount: file.sliceList.length,
       bytesDownloaded,
       bytesWritten,
-      notes: [
-        validatedSliceHashCount > 0
-          ? `Validated ${validatedSliceHashCount} decompressed slice SHA-1 values against manifest file hashes.`
-          : 'Manifest file did not expose per-slice decompressed SHA-1 hashes for validation.',
-        'This command experimentally reconstructs a single manifest file from live slice payloads. It is not a full installer/update engine yet.'
-      ]
+      validatedSliceHashCount
     };
   }
 

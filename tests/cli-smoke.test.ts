@@ -40,5 +40,6 @@ describe('cli smoke test', () => {
     expect(stdout).toContain('slice-urls');
     expect(stdout).toContain('download-slices');
     expect(stdout).toContain('extract-file');
+    expect(stdout).toContain('extract-files');
   }, 120_000);
 });

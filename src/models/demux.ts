@@ -87,6 +87,29 @@ export interface DemuxExtractedFileResult {
   notes: string[];
 }
 
+export interface DemuxExtractedFilesItem {
+  manifestPath: string;
+  outputPath: string;
+  sliceCount: number;
+  bytesWritten: number;
+}
+
+export interface DemuxExtractedFilesResult {
+  title: string;
+  demuxProductId: number;
+  publicProductId?: number;
+  manifestHash: string;
+  outputDir: string;
+  matchedCount: number;
+  extractedCount: number;
+  sliceReferenceCount: number;
+  uniqueSliceCount: number;
+  bytesDownloaded: number;
+  bytesWritten: number;
+  files: DemuxExtractedFilesItem[];
+  notes: string[];
+}
+
 export interface LiveManifestDownload {
   game: DemuxOwnedGame;
   manifestHash: string;

@@ -3,7 +3,10 @@ import type { Command } from 'commander';
 import { AuthService } from '../core/auth-service';
 import { DemuxClient } from '../core/demux-client';
 import { HttpClient } from '../core/http';
-import type { DemuxExtractedFileResult } from '../models/demux';
+import type {
+  DemuxExtractedFileResult,
+  DemuxExtractedFilesResult
+} from '../models/demux';
 import { DemuxService } from '../services/demux-service';
 import { LibraryService } from '../services/library-service';
 import { ProductService } from '../services/product-service';
@@ -21,6 +24,28 @@ function renderHuman(info: DemuxExtractedFileResult): string {
     `sliceCount: ${info.sliceCount}`,
     `bytesDownloaded: ${info.bytesDownloaded}`,
     `bytesWritten: ${info.bytesWritten}`,
+    `notes: ${info.notes.join(' | ')}`
+  ].join('\n');
+}
+
+function renderBatchHuman(info: DemuxExtractedFilesResult): string {
+  return [
+    `title: ${info.title}`,
+    `demuxProductId: ${info.demuxProductId}`,
+    `publicProductId: ${info.publicProductId ?? 'unknown'}`,
+    `manifestHash: ${info.manifestHash}`,
+    `outputDir: ${info.outputDir}`,
+    `matchedCount: ${info.matchedCount}`,
+    `extractedCount: ${info.extractedCount}`,
+    `sliceReferenceCount: ${info.sliceReferenceCount}`,
+    `uniqueSliceCount: ${info.uniqueSliceCount}`,
+    `bytesDownloaded: ${info.bytesDownloaded}`,
+    `bytesWritten: ${info.bytesWritten}`,
+    `files:`,
+    ...info.files.map(
+      (file) =>
+        `  - ${file.manifestPath} | slices=${file.sliceCount} | bytes=${file.bytesWritten} | path=${file.outputPath}`
+    ),
     `notes: ${info.notes.join(' | ')}`
   ].join('\n');
 }
@@ -96,6 +121,54 @@ export function registerExtractFileCommand(
           }
 
           process.stdout.write(`${renderHuman(info)}\n`);
+        } finally {
+          await demuxService.destroy();
+        }
+      }
+    );
+
+  program
+    .command('extract-files <query> <pathFilter>')
+    .description(
+      'Experimentally reconstruct multiple live manifest files whose paths match a substring or prefix filter'
+    )
+    .option('--json', 'Output JSON')
+    .option(
+      '--prefix',
+      'Treat <pathFilter> as a normalized manifest-path prefix'
+    )
+    .option('--limit <n>', 'Limit the number of matched files extracted', '10')
+    .option(
+      '--output-dir <path>',
+      'Override the root output directory for extracted files'
+    )
+    .action(
+      async (
+        query: string,
+        pathFilter: string,
+        options: {
+          json?: boolean;
+          prefix?: boolean;
+          limit?: string;
+          outputDir?: string;
+        }
+      ) => {
+        const context = await makeContext();
+        const demuxService = buildDemuxService(context);
+        try {
+          const limit = Number.parseInt(options.limit ?? '10', 10);
+          const info = await demuxService.extractFiles(query, pathFilter, {
+            prefixMatch: options.prefix,
+            limit: Number.isNaN(limit) ? 10 : limit,
+            outputDir: options.outputDir
+          });
+
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify(info, null, 2)}\n`);
+            return;
+          }
+
+          process.stdout.write(`${renderBatchHuman(info)}\n`);
         } finally {
           await demuxService.destroy();
         }
