@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { zstdCompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
@@ -406,5 +407,122 @@ describe('demux service', () => {
       bytesWritten: 11
     });
     expect(reconstructed).toBe('Hello World');
+  });
+
+  it('falls back to sequential slice offsets when manifest slice fileOffset values are all zero defaults', async () => {
+    const firstSlice = Buffer.from('MZ-first-half');
+    const secondSlice = Buffer.from('second-half');
+    const firstSliceCompressed = zstdCompressSync(firstSlice);
+    const secondSliceCompressed = zstdCompressSync(secondSlice);
+    const service = new DemuxService(
+      {
+        debugDir: '/tmp',
+        sessionFile: '/tmp/session.json'
+      } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined }),
+        debug: () => undefined
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'ticket',
+            sessionId: 'session',
+            userId: 'user'
+          })
+      } as never,
+      {
+        getDownloadUrlsForRelativePaths: (
+          _session: unknown,
+          _productId: number,
+          relativePaths: string[]
+        ) =>
+          Promise.resolve({
+            responses: relativePaths.map((relativePath) => ({
+              result: 0,
+              relativePath,
+              urls: [`https://example.test/${relativePath}`]
+            }))
+          })
+      } as never,
+      {
+        requestRaw: (url: string) =>
+          Promise.resolve({
+            status: 200,
+            body: url.includes('665A69EDD249A5DE013007219DFAE260C0053112')
+              ? firstSliceCompressed
+              : secondSliceCompressed
+          })
+      } as never
+    );
+
+    Object.assign(service as object, {
+      parseLiveManifest: () =>
+        Promise.resolve({
+          download: {
+            game: {
+              title: 'Far Cry® 3',
+              demuxProductId: 46,
+              publicProductId: 46
+            },
+            manifestHash: 'LIVEHASH'
+          },
+          parsed: {
+            chunks: [
+              {
+                files: [
+                  {
+                    name: 'bin/game.exe',
+                    size: firstSlice.length + secondSlice.length,
+                    isDir: false,
+                    slices: [
+                      createHash('sha1').update(firstSlice).digest('base64'),
+                      createHash('sha1').update(secondSlice).digest('base64')
+                    ],
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '665A69EDD249A5DE013007219DFAE260C0053112',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: firstSlice.length
+                      },
+                      {
+                        downloadSha1: Buffer.from(
+                          '2A10574931F301B504468475F22D010EE80344D4',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: secondSlice.length
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        })
+    });
+
+    const result = await service.extractFile(
+      '46',
+      'bin/game.exe',
+      '/tmp/ubi-extract-test/game.exe'
+    );
+    const reconstructed = await readFile(
+      '/tmp/ubi-extract-test/game.exe',
+      'utf8'
+    );
+
+    expect(reconstructed).toBe('MZ-first-halfsecond-half');
+    expect(result.notes[0]).toContain('Validated 2 decompressed slice SHA-1');
   });
 });

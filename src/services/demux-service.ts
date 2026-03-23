@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdir, open, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
@@ -80,6 +81,7 @@ interface ParsedManifestFileEntry {
   name?: string;
   size?: unknown;
   isDir?: boolean;
+  slices?: Array<string | Buffer>;
   sliceList?: ParsedManifestSliceEntry[];
 }
 
@@ -111,6 +113,10 @@ function toNumber(value: unknown): number {
 
 function normalizeManifestPathForMatch(value: string): string {
   return value.replaceAll('\\', '/').toLowerCase();
+}
+
+function sha1Base64(value: Buffer): string {
+  return createHash('sha1').update(value).digest('base64');
 }
 
 function chunkArray<T>(items: T[], chunkSize: number): T[][] {
@@ -470,11 +476,16 @@ export class DemuxService {
     const decompressedByPath = new Map<string, Buffer>();
     let bytesDownloaded = 0;
     let bytesWritten = 0;
+    let nextImplicitOffset = 0;
+    let validatedSliceHashCount = 0;
+    const shouldInferSequentialOffsets =
+      file.sliceList.length > 1 &&
+      file.sliceList.every((slice) => toNumber(slice.fileOffset) === 0);
 
     try {
       await handle.truncate(toNumber(file.size));
 
-      for (const slice of file.sliceList) {
+      for (const [index, slice] of file.sliceList.entries()) {
         if (!slice.downloadSha1) {
           throw new Error(
             `Manifest file "${file.name}" had a slice without downloadSha1.`
@@ -524,13 +535,35 @@ export class DemuxService {
           );
         }
 
+        const expectedSliceSha1 = file.slices?.[index];
+        if (expectedSliceSha1) {
+          const expectedBase64 =
+            typeof expectedSliceSha1 === 'string'
+              ? expectedSliceSha1
+              : Buffer.from(expectedSliceSha1).toString('base64');
+          const actualBase64 = sha1Base64(decompressedBody);
+          if (actualBase64 !== expectedBase64) {
+            throw new Error(
+              `Slice ${relativePath} decompressed SHA-1 ${actualBase64} but manifest file slice expected ${expectedBase64}.`
+            );
+          }
+
+          validatedSliceHashCount += 1;
+        }
+
+        const writeOffset = shouldInferSequentialOffsets
+          ? nextImplicitOffset
+          : slice.fileOffset !== undefined
+            ? toNumber(slice.fileOffset)
+            : nextImplicitOffset;
         await handle.write(
           decompressedBody,
           0,
           decompressedBody.length,
-          toNumber(slice.fileOffset)
+          writeOffset
         );
         bytesWritten += decompressedBody.length;
+        nextImplicitOffset = writeOffset + decompressedBody.length;
       }
     } finally {
       await handle.close();
@@ -547,6 +580,9 @@ export class DemuxService {
       bytesDownloaded,
       bytesWritten,
       notes: [
+        validatedSliceHashCount > 0
+          ? `Validated ${validatedSliceHashCount} decompressed slice SHA-1 values against manifest file hashes.`
+          : 'Manifest file did not expose per-slice decompressed SHA-1 hashes for validation.',
         'This command experimentally reconstructs a single manifest file from live slice payloads. It is not a full installer/update engine yet.'
       ]
     };
