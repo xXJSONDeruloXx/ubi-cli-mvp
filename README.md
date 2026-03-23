@@ -195,7 +195,7 @@ The current MVP can download **raw slice blobs** for an owned live build to disk
 
 ### `ubi extract-file 3539 'Support\Readme\English\Readme.txt'`
 
-The current MVP can experimentally reconstruct at least some individual files from live slice payloads by downloading the file's required slices, decompressing them, and writing them at the manifest-declared offsets. This has been live-validated on a one-slice Origins readme file, but it is not yet a general-purpose installer/update path.[19]
+The current MVP can experimentally reconstruct at least some individual files from live slice payloads by downloading the file's required slices, decompressing them, validating decompressed slice SHA-1 values against manifest `slices[]` hashes when present, and writing them using either manifest-declared offsets or an implicit sequential fallback when the parsed `sliceList[].fileOffset` values are all protobuf-default zeroes. This has now been live-validated on both a one-slice Origins readme file and the multi-slice `d3dcompiler_47.dll`, but it is not yet a general-purpose installer/update path.[19]
 
 ## Architecture overview
 

@@ -81,7 +81,13 @@ Completed after the breakthrough:
   - `download_service.urlReq` may return **one response row** whose URL list contains many requested slice paths.
   - the client now groups those URLs by parsing the returned CDN pathnames instead of assuming one response row per requested relative path.
 - With that fix, the repo can now fetch all requested URLs for at least some multi-slice files too.
-- Multi-slice _reconstruction semantics_ are still not fully proven though: a later live attempt on `d3dcompiler_47.dll` produced the expected byte length but not an obviously valid PE header, so whole-build reconstruction remains unreliable.
+- A later follow-up found that many parsed `sliceList[].fileOffset` values come through as protobuf default zeroes even when the manifest JSON rendering omits the field; treating an all-zero multi-slice list as **implicit sequential offsets** fixed a real live extraction issue.
+- The service also now validates each decompressed slice body against the manifest file's `slices[]` SHA-1 values when available.
+- With those two fixes, live extraction of `d3dcompiler_47.dll` for owned product `3539` now succeeds too:
+  - output size `4488896`
+  - file magic `MZ`
+  - `file` identified it as `PE32+ executable (DLL) (console) x86-64`
+- Whole-build reconstruction is still unreliable though: this is now stronger evidence that some individual multi-slice files can be rebuilt correctly, but the repo still does not implement full installer/update orchestration.
 
 ### Current blocker frontier
 

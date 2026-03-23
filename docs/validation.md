@@ -52,7 +52,7 @@ npm run build
 Outcome:
 
 - `format:check`, `lint`, `typecheck`, and all tests passed.
-- Current automated test count: 34 tests across 16 test files.
+- Current automated test count: 35 tests across 16 test files.
 
 ### Auth / account
 
@@ -138,6 +138,7 @@ Outcome:
 - `files 3539 --live --limit 3` surfaced the largest live build files, led by `DataPC_ACE_Egypt_ext.forge`
 - `download-plan 3539 --live` returned `installBytes: 79647476759` and `downloadBytes: 69428160597` for the current owned build
 - `extract-file 3539 'Support\\Readme\\English\\Readme.txt'` reconstructed a live single-slice readme file whose output began with `Ubisoft Entertainment / Assassin's Creed® Origins v1.6.1`
+- `extract-file 3539 'd3dcompiler_47.dll'` now reconstructs a live multi-slice DLL too after accounting for all-zero parsed `sliceList[].fileOffset` defaults; the output had `MZ` magic and `file` identified it as `PE32+ executable (DLL) (console) x86-64`
 
 ### Demux validation commands
 
