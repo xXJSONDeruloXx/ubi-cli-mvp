@@ -26,39 +26,39 @@ Exit criteria:
 
 Exit criteria:
 
-- [ ] Implement `ubi login`
-- [ ] Implement `ubi logout`
-- [ ] Implement `ubi me`
-- [ ] Persist/redact session state safely
-- [ ] Add refresh logic and tests
-- [ ] Document blockers if live auth needs manual intervention
+- [x] Implement `ubi login`
+- [x] Implement `ubi logout`
+- [x] Implement `ubi me`
+- [x] Persist/redact session state safely
+- [x] Add refresh logic and tests
+- [x] Document blockers if live auth needs manual intervention
 
 ### Milestone 3: library/ownership proof
 
 Exit criteria:
 
-- [ ] Implement `ubi list`
-- [ ] Prefer live Demux ownership; add fallback if needed
-- [ ] Normalize account/product data
-- [ ] Add JSON output
-- [ ] Add parser/normalizer tests
+- [x] Implement `ubi list`
+- [x] Prefer live Demux ownership; add fallback if needed _(evidence forced the GraphQL fallback path; live Demux is blocked and documented)_
+- [x] Normalize account/product data
+- [x] Add JSON output
+- [x] Add parser/normalizer tests
 
 ### Milestone 4: title metadata and manifest proof
 
 Exit criteria:
 
-- [ ] Implement `ubi info <title-or-id>`
-- [ ] Implement `ubi manifest <title-or-id>`
-- [ ] Parse manifest/build metadata where possible
-- [ ] Add raw fixture coverage and parsing tests
+- [x] Implement `ubi info <title-or-id>`
+- [x] Implement `ubi manifest <title-or-id>`
+- [x] Parse manifest/build metadata where possible
+- [x] Add raw fixture coverage and parsing tests
 
 ### Milestone 5: validation and polish
 
 Exit criteria:
 
-- [ ] Write `docs/validation.md`
-- [ ] Add smoke tests
-- [ ] Update README with validated scope/limits
+- [x] Write `docs/validation.md`
+- [x] Add smoke tests
+- [x] Update README with validated scope/limits
 - [ ] Create MVP tag/release if validation supports it
 
 ## Progress log
@@ -68,3 +68,6 @@ Exit criteria:
 - 2026-03-23: Chosen high-level strategy: HTTP auth/session + Demux ownership/manifest where available, with GraphQL/public-dataset fallbacks for resilience.[2][4][5][6][9][11]
 - 2026-03-23: Bootstrapped the TypeScript repo, added CI/lint/test tooling, implemented `ubi doctor` and `ubi config show`, and added smoke/unit tests for config/session behavior.
 - 2026-03-23: User provided local `.env` credentials for live testing; keep all command output and logs sanitized.
+- 2026-03-23: Validated live auth (`login`, `logout`, `me`) against the public Ubisoft session/user endpoints.
+- 2026-03-23: Validated live GraphQL library listing for the test account and confirmed partial product-ID mapping through the public `UplayManifests` datasets.
+- 2026-03-23: Validated `info` and `manifest` flows using a mix of live resolution and public manifest fixtures; documented the blocked live Demux path in `docs/validation.md`.
