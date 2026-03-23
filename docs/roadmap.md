@@ -77,3 +77,4 @@ Exit criteria:
 - 2026-03-23: Implemented `demux-list`, `demux-info`, `download-urls`, `slice-urls`, `download-slices`, and live Demux-backed `manifest/files/download-plan --live` flows with passing unit/smoke coverage.
 - 2026-03-23: Fixed download-service asset URL extraction so `.manifest`, `.metadata`, and `.licenses` URLs are recognized even when returned as alternates under a single manifest response row; added `manifest --live --with-assets` to fetch and parse live metadata/license assets for owned titles.
 - 2026-03-23: Added `extract-file` to experimentally reconstruct an individual file from live manifest slice metadata; live validation succeeded for an Origins readme file and established a partial path beyond raw slice downloads.
+- 2026-03-23: Corrected download-service URL-response normalization for multi-path slice requests by grouping returned CDN URLs by parsed pathname instead of assuming one response row per requested path.

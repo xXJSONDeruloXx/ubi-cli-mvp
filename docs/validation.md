@@ -52,7 +52,7 @@ npm run build
 Outcome:
 
 - `format:check`, `lint`, `typecheck`, and all tests passed.
-- Current automated test count: 33 tests across 16 test files.
+- Current automated test count: 34 tests across 16 test files.
 
 ### Auth / account
 

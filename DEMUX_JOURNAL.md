@@ -77,7 +77,11 @@ Completed after the breakthrough:
   - `Support\Readme\English\Readme.txt`
   - output size `15538`
   - reconstructed content began with `Ubisoft Entertainment / Assassin's Creed® Origins v1.6.1`
-- Not every attempted multi-slice file has succeeded yet; one live attempt for `d3dcompiler_47.dll` failed because Demux did not return a URL for one expected slice path, so whole-build reconstruction is still not reliable.
+- A later follow-up found that the apparent “missing slice URL” issue was partly a client-mapping bug:
+  - `download_service.urlReq` may return **one response row** whose URL list contains many requested slice paths.
+  - the client now groups those URLs by parsing the returned CDN pathnames instead of assuming one response row per requested relative path.
+- With that fix, the repo can now fetch all requested URLs for at least some multi-slice files too.
+- Multi-slice _reconstruction semantics_ are still not fully proven though: a later live attempt on `d3dcompiler_47.dll` produced the expected byte length but not an obviously valid PE header, so whole-build reconstruction remains unreliable.
 
 ### Current blocker frontier
 
