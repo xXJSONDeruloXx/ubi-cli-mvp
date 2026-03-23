@@ -17,12 +17,18 @@ vi.mock('env-paths', () => ({
 
 describe('core/config', () => {
   beforeEach(async () => {
+    delete process.env.UBI_APP_ID;
+    delete process.env.UBI_BROWSER_APP_ID;
+    delete process.env.UBI_GENOME_ID;
+
     const root = await mkdtemp(path.join(tmpdir(), 'ubi-cli-config-'));
     envPathState.config = path.join(root, 'config');
     envPathState.data = path.join(root, 'data');
     envPathState.cache = path.join(root, 'cache');
     envPathState.log = path.join(root, 'log');
     envPathState.temp = path.join(root, 'temp');
+
+    vi.resetModules();
   });
 
   it('creates all expected app directories', async () => {
@@ -40,8 +46,13 @@ describe('core/config', () => {
     expect(paths.configFile.endsWith('config.json')).toBe(true);
   });
 
-  it('merges stored config with defaults', async () => {
+  it('ignores blank environment overrides and merges stored config with defaults', async () => {
+    process.env.UBI_APP_ID = '   ';
+    process.env.UBI_BROWSER_APP_ID = '';
+    process.env.UBI_GENOME_ID = '  ';
+
     const {
+      DEFAULT_CONFIG,
       ensureAppDirs,
       getAppPaths,
       loadRuntimeConfig,
@@ -49,6 +60,10 @@ describe('core/config', () => {
     } = await import('../src/core/config');
     const paths = getAppPaths();
     await ensureAppDirs(paths);
+
+    expect(DEFAULT_CONFIG.servicesAppId).toBe(
+      'f68a4bb5-608a-4ff2-8123-be8ef797e0a6'
+    );
 
     const stored = {
       appName: 'ubi-cli-mvp',

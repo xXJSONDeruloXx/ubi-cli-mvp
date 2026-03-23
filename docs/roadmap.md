@@ -67,3 +67,4 @@ Exit criteria:
 - 2026-03-23: Completed research pass across `ubisoft-demux-node`, `UplayKit`, `UplayManifests`, `ubi-cli`, Lutris, and one lower-confidence newer client for challenge/pagination notes.[1][2][4][5][6][9][11][16]
 - 2026-03-23: Chosen high-level strategy: HTTP auth/session + Demux ownership/manifest where available, with GraphQL/public-dataset fallbacks for resilience.[2][4][5][6][9][11]
 - 2026-03-23: Bootstrapped the TypeScript repo, added CI/lint/test tooling, implemented `ubi doctor` and `ubi config show`, and added smoke/unit tests for config/session behavior.
+- 2026-03-23: User provided local `.env` credentials for live testing; keep all command output and logs sanitized.

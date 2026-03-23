@@ -4,13 +4,20 @@ import path from 'node:path';
 import envPaths from 'env-paths';
 import type { AppPaths, RuntimeConfig } from '../models/config';
 
+function readOptionalEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
+}
+
 export const DEFAULT_CONFIG: RuntimeConfig = {
   appName: 'ubi-cli-mvp',
   servicesAppId:
-    process.env.UBI_APP_ID ?? '82b650c0-6cb3-40c0-9f41-25a53b62b206',
+    readOptionalEnv('UBI_APP_ID') ?? 'f68a4bb5-608a-4ff2-8123-be8ef797e0a6',
   browserAppId:
-    process.env.UBI_BROWSER_APP_ID ?? '314d4fef-e568-454a-ae06-43e3bece12a6',
-  genomeId: process.env.UBI_GENOME_ID ?? '42d07c95-9914-4450-8b38-267c4e462b21',
+    readOptionalEnv('UBI_BROWSER_APP_ID') ??
+    '314d4fef-e568-454a-ae06-43e3bece12a6',
+  genomeId:
+    readOptionalEnv('UBI_GENOME_ID') ?? '42d07c95-9914-4450-8b38-267c4e462b21',
   requestedPlatformType: 'uplay',
   httpTimeoutMs: 15000,
   httpRetryCount: 2
