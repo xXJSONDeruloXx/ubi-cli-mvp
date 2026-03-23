@@ -73,3 +73,4 @@ Exit criteria:
 - 2026-03-23: Validated `info` and `manifest` flows using a mix of live resolution and public manifest fixtures; documented the blocked live Demux path in `docs/validation.md`.
 - 2026-03-23: Improved product-config parsing so localized config keys like `l1` resolve to readable titles and fallback game-code fields such as `achievements_sync_id` are surfaced in `ubi info`.
 - 2026-03-23: Added deduped library output, title search, public catalog disambiguation support, associated-product/DLC exploration, manifest file listing, and dry-run download planning from public fixtures.
+- 2026-03-23: Broke through the Demux connectivity problem by forcing TLS 1.2 and following the patch-version-plus-clientVersion handshake; validated live ownership initialization, ownership-token retrieval, and download-service signed manifest URL retrieval.[19][20]

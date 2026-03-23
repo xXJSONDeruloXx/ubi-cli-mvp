@@ -53,7 +53,7 @@ High-level status:
 - info: **validated live/public-dataset mix**[19]
 - manifest/files/download-plan: **validated with public fixtures**[19]
 - addons: **validated against the public association graph**[19]
-- live Demux ownership/download-service retrieval: **blocked** in this environment[19]
+- live Demux transport/auth/ownership/download-service URL retrieval: **validated in repo experiments but not fully exposed in the CLI yet**[19][20]
 
 See `docs/validation.md` for exact commands, outcomes, and caveats.[19]
 
@@ -204,11 +204,11 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 
 ## Limitations
 
-1. The current MVP does **not** validate live Demux ownership enumeration or live download-service manifest URL retrieval; both remain blocked in this environment.[19]
-2. `ubi list` uses the live GraphQL library endpoint rather than live Demux ownership because that is what validated end-to-end here.[6][9][19]
-3. Public catalog mappings are incomplete, so some owned titles do not currently map to a known Ubisoft product ID and appear as `productId=unknown`.[14][19]
+1. Although Demux transport/auth/ownership/download-service URL retrieval now validate in repo experiments, the CLI still relies primarily on GraphQL/public-catalog paths until the Demux flows are fully wired and normalized.[19][20]
+2. `ubi list` currently uses the live GraphQL library endpoint rather than the newly validated Demux ownership path.[6][9][19]
+3. Public-catalog product IDs do not always align 1:1 with Demux ownership product IDs, so cross-surface reconciliation still needs implementation work.[4][14][19]
 4. `ubi manifest`, `ubi files`, and `ubi download-plan` currently inspect public fixture data where available instead of live `.manifest/.metadata/.licenses` download-service responses.[5][11][17][19]
-5. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless future live Demux ownership validation is added.[4][12][19]
+5. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
 
 ## Roadmap
 

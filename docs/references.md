@@ -36,4 +36,6 @@
 
 [18] UplayDB, sample public parsed manifest text `files/46_0C3D19B8681787293905C848F20553A0D21133C6.txt`. Used to sanity-check manifest parsing output for the fixture in [17]. https://raw.githubusercontent.com/UplayDB/UplayManifests/main/files/46_0C3D19B8681787293905C848F20553A0D21133C6.txt
 
-[19] `docs/validation.md` in this repository. Repo-local evidence log for live command validation, fixture-based validation, and blocked Demux experiments carried out on 2026-03-23. ./docs/validation.md
+[19] `docs/validation.md` in this repository. Repo-local evidence log for live command validation, fixture-based validation, and Demux validation experiments carried out on 2026-03-23. ./docs/validation.md
+
+[20] UplayDB, `UplayKit/UplayKit/DemuxSocketExt.cs`. Shows the Demux `getPatchInfoReq`, `clientVersion` push, and `authenticateReq` sequence used by another reverse-engineered client. https://raw.githubusercontent.com/UplayDB/UplayKit/main/UplayKit/DemuxSocketExt.cs
