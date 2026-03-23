@@ -24,6 +24,7 @@ import {
   sliceHexToCandidateRelativePaths,
   sliceTokenToHex
 } from '../util/demux-slices';
+import { normalizeManifestPathForMatch } from '../util/manifest-paths';
 import { normalizeForMatch, scoreTitleMatch } from '../util/matching';
 import type { Logger } from '../util/logger';
 import type { ProductService } from './product-service';
@@ -125,10 +126,6 @@ function toNumber(value: unknown): number {
   }
 
   return 0;
-}
-
-function normalizeManifestPathForMatch(value: string): string {
-  return value.replaceAll('\\', '/').replaceAll('//', '/').toLowerCase();
 }
 
 function sha1Base64(value: Buffer): string {

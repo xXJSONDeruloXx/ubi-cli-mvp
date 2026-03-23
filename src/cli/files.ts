@@ -9,7 +9,22 @@ import { ManifestService } from '../services/manifest-service';
 import { ProductService } from '../services/product-service';
 import { PublicCatalogService } from '../services/public-catalog-service';
 import { DemuxService } from '../services/demux-service';
+import { manifestPathMatches } from '../util/manifest-paths';
 import type { CliContext } from './context';
+
+function filterManifestFiles(
+  items: ManifestFileEntry[],
+  match: string | undefined,
+  prefixMatch = false
+): ManifestFileEntry[] {
+  if (!match) {
+    return items;
+  }
+
+  return items.filter((item) =>
+    manifestPathMatches(item.path, match, prefixMatch)
+  );
+}
 
 function renderHuman(items: ManifestFileEntry[]): string {
   if (items.length === 0) {
@@ -89,19 +104,35 @@ export function registerFilesCommand(
       'Use live Demux/download-service retrieval instead of the public fixture path'
     )
     .option('--limit <n>', 'Limit the number of files shown', '25')
+    .option(
+      '--match <text>',
+      'Filter manifest file paths by normalized substring or prefix'
+    )
+    .option(
+      '--prefix',
+      'Treat --match as a normalized manifest-path prefix instead of a substring'
+    )
     .action(
       async (
         titleOrId: string,
-        options: { json?: boolean; live?: boolean; limit?: string }
+        options: {
+          json?: boolean;
+          live?: boolean;
+          limit?: string;
+          match?: string;
+          prefix?: boolean;
+        }
       ) => {
         const context = await makeContext();
         const manifestService = buildManifestService(context);
         try {
           const limit = Number.parseInt(options.limit ?? '25', 10);
-          const items = (
+          const items = filterManifestFiles(
             options.live
               ? await manifestService.getLiveManifestFiles(titleOrId)
-              : await manifestService.getManifestFiles(titleOrId)
+              : await manifestService.getManifestFiles(titleOrId),
+            options.match,
+            options.prefix
           ).slice(0, Number.isNaN(limit) ? 25 : limit);
 
           if (options.json) {
