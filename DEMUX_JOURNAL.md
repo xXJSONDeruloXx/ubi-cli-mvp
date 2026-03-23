@@ -87,7 +87,18 @@ Completed after the breakthrough:
   - output size `4488896`
   - file magic `MZ`
   - `file` identified it as `PE32+ executable (DLL) (console) x86-64`
-- Whole-build reconstruction is still unreliable though: this is now stronger evidence that some individual multi-slice files can be rebuilt correctly, but the repo still does not implement full installer/update orchestration.
+- The repo now also supports experimental **batch** extraction for multiple matching files from one live manifest query:
+  - `extract-files <query> <pathFilter> [--prefix]`
+  - it resolves slice URLs once for the matched set and reuses already-downloaded slice payloads across files when possible.
+- Live validation on Origins with `extract-files 3539 'Support\\Readme' --prefix --limit 3` reconstructed three readme files into one output tree with:
+  - `matchedCount: 15`
+  - `extractedCount: 3`
+  - `sliceReferenceCount: 3`
+  - `uniqueSliceCount: 3`
+  - `bytesDownloaded: 14081`
+  - `bytesWritten: 51942`
+- That specific live sample did not demonstrate cross-file slice reuse, but the batch path itself now works live and reuse is covered by unit tests.
+- Whole-build reconstruction is still unreliable though: this is now stronger evidence that some individual multi-slice files and small matching batches can be rebuilt correctly, but the repo still does not implement full installer/update orchestration.
 
 ### Current blocker frontier
 

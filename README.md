@@ -197,6 +197,10 @@ The current MVP can download **raw slice blobs** for an owned live build to disk
 
 The current MVP can experimentally reconstruct at least some individual files from live slice payloads by downloading the file's required slices, decompressing them, validating decompressed slice SHA-1 values against manifest `slices[]` hashes when present, and writing them using either manifest-declared offsets or an implicit sequential fallback when the parsed `sliceList[].fileOffset` values are all protobuf-default zeroes. This has now been live-validated on both a one-slice Origins readme file and the multi-slice `d3dcompiler_47.dll`, but it is not yet a general-purpose installer/update path.[19]
 
+### `ubi extract-files 3539 'Support\\Readme' --prefix --limit 3`
+
+The current MVP can also experimentally reconstruct small batches of matching files from a live manifest. The batch extractor resolves slice URLs once for all matched files and reuses downloaded slice payloads across the batch when possible. This has been live-validated for multiple Origins readme files under `Support\Readme\...`, but it remains an exploratory workflow rather than a full installer/update engine.[19]
+
 ## Architecture overview
 
 The codebase is split into thin CLI commands, core auth/config/transport helpers, service-layer workflows, and normalized domain models.
