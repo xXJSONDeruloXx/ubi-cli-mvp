@@ -27,15 +27,16 @@ Responsibilities:
 
 Cross-cutting runtime and protocol primitives.
 
-Planned modules:
+Current modules:
 
 - `config.ts`: resolve config/cache paths
 - `session-store.ts`: read/write/redact session state
 - `http.ts`: HTTP client, retries, timeouts, JSON helpers
 - `auth-service.ts`: login, refresh, logout, me
-- `demux-client.ts`: authenticated Demux interactions
+- `demux-client.ts`: authenticated Demux patch negotiation, auth, ownership-service, and download-service interactions
+- `ubisoft-demux-loader.ts`: runtime patching for the public Node package's proto resolution
 
-Rationale: public sources show that HTTP sessions and Demux tickets are related but distinct concerns, so the MVP keeps them in separate core components.[1][2][4][9]
+Rationale: public sources show that HTTP sessions and Demux tickets are related but distinct concerns, so the repo keeps them in separate core components.[1][2][4][9]
 
 ### `src/services/`
 
@@ -43,11 +44,12 @@ Use-case-oriented workflows on top of the core layer.
 
 Current modules:
 
-- `library-service.ts`: owned titles via GraphQL plus normalization/deduping helpers; this remains the default user-facing list path while Demux ownership is exposed through dedicated commands and live-manifest flows.[4][6][9][19][20]
+- `library-service.ts`: owned titles via GraphQL plus normalization/deduping helpers; this remains the default user-facing list path.[6][9][19]
 - `search-service.ts`: merge owned-library matches with public catalog matches to disambiguate product IDs, editions, and DLC-like entries.[12][14][15]
 - `product-service.ts`: resolve a product by ID/name and hydrate metadata from live or public sources.[4][14][15]
+- `demux-service.ts`: normalize live Demux ownership rows, reconcile them against public/catalog identifiers, obtain ownership tokens, request signed download-service URLs, derive slice paths, and optionally download raw slice blobs for inspection.[4][5][19][20]
 - `addon-service.ts`: expose public associated products from the catalog graph for DLC exploration, without claiming ownership.[12][19]
-- `manifest-service.ts`: fetch/parse manifests live when possible; otherwise inspect public fixture/public manifest metadata and derive dry-run file/size summaries.[3][5][13][17][18][19]
+- `manifest-service.ts`: fetch/parse manifests from public fixtures by default and from live Demux/download-service URLs when requested, deriving dry-run file/size summaries from either source.[3][5][13][17][18][19]
 - `public-catalog-service.ts`: fetch/cache `UplayManifests` datasets and build searchable config/title indexes.[11][12][13][14][15]
 
 ### `src/models/`
@@ -61,6 +63,10 @@ Current key types:
 - `LibraryItem`
 - `SearchResult`
 - `ProductInfo`
+- `DemuxOwnedGame`
+- `DemuxDownloadUrlsInfo`
+- `DemuxSliceUrlsInfo`
+- `DemuxSliceDownloadResult`
 - `AddonInfo`
 - `ManifestInfo`
 - `DownloadPlan`
@@ -71,14 +77,12 @@ Rationale: raw reverse-engineered payloads are unstable, so commands should spea
 
 Helpers that do not belong to transport or domain logic.
 
-Planned modules:
+Current modules include:
 
 - `logger.ts`
-- `redaction.ts`
-- `output.ts`
 - `errors.ts`
-- `yaml.ts`
 - `matching.ts`
+- `demux-slices.ts`
 
 ## Data flow
 
@@ -89,63 +93,55 @@ Planned modules:
 3. On success, `SessionStore` persists the session ticket, session ID, expiry, remember-me ticket, and user ID.[2][9]
 4. Later commands call `ensureValidSession()`, which tries `PUT /v3/profiles/sessions` refresh first and remember-me refresh second.[9]
 
-### `ubi me`
-
-1. Load/refresh session.
-2. Request `GET /v3/users/{userId}` when possible.[6]
-3. Normalize the result into `AccountIdentity`.
-4. Output JSON or human text.
-
 ### `ubi list`
 
 1. Load/refresh session.
-2. Try Demux authenticate + ownership-service initialize.[1][4]
-3. If that succeeds, normalize `OwnedGame` entries into `LibraryItem` records.
-4. If Demux fails, try GraphQL `viewer.games` as an explicitly weaker fallback.[6][9]
+2. Call GraphQL `viewer.games` via the public HTTP API.[6][9]
+3. Enrich the results with public catalog lookups.
+4. Optionally dedupe variant rows into a friendlier summary view.
 
-### `ubi search <text>`
+### `ubi demux-list` / `ubi demux-info <query>`
 
-1. Load the owned library summary and normalize titles.
-2. Search the parsed public product-config title index.
-3. Merge owned and public hits into a single de-duplicated result list.
-4. Use the returned product IDs to drive `ubi info`, `ubi addons`, or `ubi manifest`.
+1. Load/refresh the public HTTP session.
+2. Open a TLS 1.2 Demux socket.
+3. Send `getPatchInfoReq`, then push `clientVersion = latestVersion`, then authenticate with the HTTP session ticket.[19][20]
+4. Open `ownership_service` and send `initializeReq` with the session ticket and session ID.[4]
+5. Normalize owned products into stable internal models and reconcile them against public product IDs via `SpaceId`, `AppId`, and exact-title fallbacks.[14][15][19]
 
-### `ubi info <title-or-id>`
+### `ubi download-urls <query>`
 
-Resolution order:
+1. Resolve an owned Demux product.
+2. Obtain an ownership token from `ownership_service`.[4]
+3. Open `download_service` with that token.[5]
+4. Request signed URLs for `.manifest`, `.metadata`, and `.licenses` assets when available.[5][19]
 
-1. library cache/live library lookup if authenticated
-2. numeric product ID lookup in public datasets
-3. optional exact public title resolution when the catalog match is unique
-4. otherwise instruct the operator to use `ubi search <text>` for ambiguity
+### `ubi manifest <query> --live` / `ubi files <query> --live` / `ubi download-plan <query> --live`
 
-Hydration order:
+1. Resolve an owned Demux product.
+2. Obtain an ownership token and signed manifest URL via `download_service`.[4][5]
+3. Fetch the live `.manifest` bytes over HTTP.
+4. Parse the manifest with the documented file parser approach.[3]
+5. Derive file lists and dry-run byte totals from the current owned build.[19]
 
-1. live `OwnedGame.configuration` / live product-config request if available.[4]
-2. public `productservice.json` + `productconfig.json` fallback.[14][15]
+### `ubi slice-urls <query>`
 
-### `ubi manifest <title-or-id>` / `ubi files <title-or-id>` / `ubi download-plan <title-or-id>`
+1. Parse the live owned manifest.
+2. Derive CDN slice paths from manifest `sliceList[].downloadSha1` values.[19]
+3. Ask `download_service` for signed URLs for a limited set of those slice paths.[5]
 
-Preferred path:
+### `ubi download-slices <query>`
 
-1. resolve product ID and manifest hash from live ownership data.[4]
-2. request an ownership token.[4]
-3. initialize download service and request manifest/metadata/license URLs.[5]
-4. download payloads and parse them with the documented parser format.[3]
+1. Derive signed slice URLs from the current owned manifest.
+2. Fetch raw slice blobs to disk.
+3. Store them under a local output directory for inspection.
+4. Explicitly stop short of reconstructing final installed game files.
 
-Fallback path:
+### Public/fallback manifest path
 
-1. resolve known manifest hashes from `manifestlist.json`.[13]
-2. if a public raw fixture exists, parse it locally for fixture-based validation.[17][18]
-3. derive file lists and dry-run byte totals from the parsed fixture when requested.[3][17][19]
-4. otherwise report that only manifest-hash inspection is currently available.
-
-### `ubi addons <title-or-id>`
-
-1. Resolve the base product.
-2. Read `ProductAssociations` from the public catalog entry.[12]
-3. Hydrate each associated product with whatever public title/type/manifest data is available.[12][14][15]
-4. Clearly label the result as a public association graph, not as a live ownership proof.[19]
+1. Resolve known manifest hashes from `manifestlist.json`.[13]
+2. If a public raw fixture exists, parse it locally for fixture-based validation.[17][18]
+3. Derive file lists and dry-run byte totals from the parsed fixture when requested.[3][17][19]
+4. Otherwise report that only manifest-hash inspection is currently available.
 
 ## Error handling model
 
@@ -163,43 +159,28 @@ The repo uses typed, user-facing error classes.
 ### Policy
 
 - Human output goes to stdout; logs and diagnostics go to stderr.
-- Sensitive fields (`ticket`, `rememberMeTicket`, `sessionId`, passwords, raw auth headers) are always redacted.
+- Sensitive fields (`ticket`, `rememberMeTicket`, `sessionId`, passwords, raw auth headers, ownership tokens) are redacted or omitted from default human output.
 - Commands return partial data only when clearly labeled as partial.
 - Demux timeouts are translated into actionable guidance because public Demux references explicitly note that protocol mistakes often surface as timeouts rather than structured errors.[1]
 
 ## Storage model
 
-### Config directory
-
-Default path: platform-specific user config directory via `env-paths`, under `ubi-cli-mvp/`.
+Default path: platform-specific user config/data/cache directories via `env-paths`, under `ubi-cli-mvp/`.
 
 Files:
 
 - `config.json`: non-secret settings such as app IDs, verbosity defaults, and cache settings
 - `session.json`: persisted session metadata and tickets (redacted in logs)
 - `cache/*.json`: cached public dataset snapshots from `UplayManifests`
-- `debug/*`: optional raw response dumps when verbose/debug flags are enabled
+- `debug/*`: optional raw manifest and Demux-related artifacts written during inspection flows
 
-### Security stance
+## Current blocker frontier
 
-Public sources show workable remember-me and refresh flows, but not a simple cross-platform keychain strategy for this specific MVP.[2][9] Therefore:
+The repo is no longer blocked on basic Demux connectivity.
 
-- the initial implementation stores sessions locally in the config directory;
-- the README and validation docs explicitly warn about local ticket storage; and
-- future keychain integration is deferred unless it can be added without destabilizing the MVP.
+The remaining frontier is the gap between **raw manifest/slice retrieval** and a true **installer/update engine**:
 
-## Why this architecture fits the milestone plan
-
-- **Milestone 0:** docs already map cleanly to module boundaries.
-- **Milestone 1:** config, logger, doctor, and CLI can be built independently of Ubisoft auth.
-- **Milestone 2:** auth/session lives entirely in `src/core/` with isolated tests.[2][9]
-- **Milestone 3:** library enumeration can compare Demux and GraphQL without changing CLI surface area.[4][6][9]
-- **Milestone 4:** manifest parsing can be validated first with public fixtures, then with live downloads if auth works.[3][5][17][18]
-- **Milestone 5:** validation docs can state per-capability evidence because each service has a narrow source-backed responsibility.
-  each service has a narrow source-backed responsibility.
-  tly of Ubisoft auth.
-- **Milestone 2:** auth/session lives entirely in `src/core/` with isolated tests.[2][9]
-- **Milestone 3:** library enumeration can compare Demux and GraphQL without changing CLI surface area.[4][6][9]
-- **Milestone 4:** manifest parsing can be validated first with public fixtures, then with live downloads if auth works.[3][5][17][18]
-- **Milestone 5:** validation docs can state per-capability evidence because each service has a narrow source-backed responsibility.
-  each service has a narrow source-backed responsibility.
+- public/catalog product IDs do not always align 1:1 with Demux ownership product IDs
+- not every entitlement row exposes a usable `latestManifest`
+- raw slice blobs can now be downloaded, but file reconstruction/install-state handling is not yet implemented
+- update/resume/repair orchestration remains out of scope until slice assembly semantics are better understood or validated

@@ -45,11 +45,14 @@ Completed after the breakthrough:
    - `ubi manifest <query> --live`
    - `ubi files <query> --live`
    - `ubi download-plan <query> --live`
+   - `ubi slice-urls <query>`
+   - `ubi download-slices <query>`
 4. added test coverage for:
    - handshake sequencing
    - ownership/download-service flows
    - Demux normalization/reconciliation
    - live-manifest service plumbing
+   - slice path derivation and raw-slice download plumbing
 
 ### Current blocker frontier
 
