@@ -25,8 +25,12 @@ Implemented or partially implemented MVP commands:
 - `ubi logout`
 - `ubi me`
 - `ubi list`
+- `ubi search <text>`
 - `ubi info <title-or-id>`
 - `ubi manifest <title-or-id>`
+- `ubi files <title-or-id>`
+- `ubi download-plan <title-or-id>`
+- `ubi addons <title-or-id>`
 - `ubi doctor`
 - `ubi config show`
 
@@ -35,17 +39,20 @@ Current command strategy:
 - auth/session: public HTTP session API.[2][9]
 - account identity: `GET /v3/users/{userId}`.[6]
 - library enumeration: public Ubisoft GraphQL library endpoint.[6][9]
-- product metadata: live library data plus public `UplayManifests` datasets.[11][14][15]
+- title/product discovery: live library data plus public `UplayManifests` datasets and parsed product configs.[11][14][15]
 - manifest inspection: public `UplayManifests` manifest hashes and raw fixtures, parsed with the public file-format parser approach from `ubisoft-demux-node`.[3][11][17][18]
+- DLC/add-on exploration: public `ProductAssociations` graph data from `gamelist.json`, exposed as associated products rather than claimed owned entitlements.[12][19]
+- download planning: parsed public manifest fixtures are used to estimate install/download size and largest files, but not to fetch live Ubisoft CDN URLs.[5][11][17][19]
 
 ## Validation status
 
 High-level status:
 
 - login/logout/me: **validated live**[19]
-- list: **validated live** via GraphQL[19]
+- list/search: **validated live/public-catalog mix**[19]
 - info: **validated live/public-dataset mix**[19]
-- manifest: **validated with public fixtures**[19]
+- manifest/files/download-plan: **validated with public fixtures**[19]
+- addons: **validated against the public association graph**[19]
 - live Demux ownership/download-service retrieval: **blocked** in this environment[19]
 
 See `docs/validation.md` for exact commands, outcomes, and caveats.[19]
@@ -100,7 +107,14 @@ node dist/index.js list
 node dist/index.js list --json
 ```
 
-### 4. Inspect a product
+### 4. Search for games, editions, or DLC-like catalog entries
+
+```bash
+node dist/index.js search unity
+node dist/index.js search "Far Cry 3" --json
+```
+
+### 5. Inspect a product
 
 By owned title/product ID:
 
@@ -110,11 +124,25 @@ node dist/index.js info "Assassin's Creed® Unity"
 node dist/index.js info 720 --json
 ```
 
-### 5. Inspect manifest metadata
+### 6. Inspect manifest metadata
 
 ```bash
 node dist/index.js manifest 720
 node dist/index.js manifest 46 --json
+```
+
+### 7. Inspect manifest file contents and a dry-run download plan
+
+```bash
+node dist/index.js files 46 --limit 10
+node dist/index.js download-plan 46
+```
+
+### 8. Explore associated products / DLC-like entries
+
+```bash
+node dist/index.js addons 720 --limit 10
+node dist/index.js addons 720 --json
 ```
 
 ## Example outputs
@@ -134,17 +162,21 @@ config file: missing
 session file: present
 ```
 
-### `ubi list`
+### `ubi list --search unity`
 
 ```text
-Assassin's Creed® Unity | productId=720 | spaceId=6678eff0-1293-4f87-8c8c-06a4ca646068
-For Honor | productId=569 | spaceId=c2294cd6-bd01-4f19-81e9-4e5d32cb763a
-Rainbow Six® Extraction | productId=5271 | spaceId=c836bbda-7c0c-4b82-b0c2-b751b1843630
+Title                    Product ID   Variants  Space ID
+-----------------------  ----------   --------  ------------------------------------
+Assassin's Creed® Unity  720          2         6678eff0-1293-4f87-8c8c-06a4ca646068
 ```
 
-### `ubi manifest 46 --json`
+### `ubi search "Far Cry 3" --json`
 
-The current MVP can return parsed manifest summaries from public fixtures, for example manifest version/chunk/file counts for a public `Far Cry® 3` fixture.[17][19]
+The current MVP can search public catalog titles to disambiguate product IDs and editions when `ubi info <title>` would otherwise be ambiguous.[12][15][19]
+
+### `ubi download-plan 46`
+
+The current MVP can return a dry-run install/download summary from a public manifest fixture, including estimated install bytes, compressed download bytes, and largest files for a known public `Far Cry® 3` fixture.[5][17][19]
 
 ## Architecture overview
 
@@ -154,7 +186,7 @@ Main directories:
 
 - `src/cli/` — command definitions
 - `src/core/` — config, session, HTTP, auth, Demux loader
-- `src/services/` — library, product, manifest, public catalog services
+- `src/services/` — library, search, product, add-on, manifest, and public catalog services
 - `src/models/` — normalized domain types
 - `src/util/` — errors, logging, matching helpers
 - `tests/` — unit and smoke tests
@@ -175,7 +207,8 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 1. The current MVP does **not** validate live Demux ownership enumeration or live download-service manifest URL retrieval; both remain blocked in this environment.[19]
 2. `ubi list` uses the live GraphQL library endpoint rather than live Demux ownership because that is what validated end-to-end here.[6][9][19]
 3. Public catalog mappings are incomplete, so some owned titles do not currently map to a known Ubisoft product ID and appear as `productId=unknown`.[14][19]
-4. `ubi manifest` currently inspects public fixture data where available instead of live `.manifest/.metadata/.licenses` download-service responses.[5][11][17][19]
+4. `ubi manifest`, `ubi files`, and `ubi download-plan` currently inspect public fixture data where available instead of live `.manifest/.metadata/.licenses` download-service responses.[5][11][17][19]
+5. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless future live Demux ownership validation is added.[4][12][19]
 
 ## Roadmap
 

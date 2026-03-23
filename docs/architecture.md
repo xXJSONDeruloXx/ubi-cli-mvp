@@ -41,25 +41,29 @@ Rationale: public sources show that HTTP sessions and Demux tickets are related 
 
 Use-case-oriented workflows on top of the core layer.
 
-Planned modules:
+Current modules:
 
-- `library-service.ts`: owned titles via Demux first, GraphQL fallback second.[4][6][9]
+- `library-service.ts`: owned titles via GraphQL plus normalization/deduping helpers; Demux ownership remains the preferred future path when connectivity is available.[4][6][9][19]
+- `search-service.ts`: merge owned-library matches with public catalog matches to disambiguate product IDs, editions, and DLC-like entries.[12][14][15]
 - `product-service.ts`: resolve a product by ID/name and hydrate metadata from live or public sources.[4][14][15]
-- `manifest-service.ts`: fetch/parse manifests live when possible; otherwise inspect public fixture/public manifest metadata.[3][5][13][17][18]
-- `public-catalog-service.ts`: fetch/cache `UplayManifests` datasets.[11][12][13][14][15]
+- `addon-service.ts`: expose public associated products from the catalog graph for DLC exploration, without claiming ownership.[12][19]
+- `manifest-service.ts`: fetch/parse manifests live when possible; otherwise inspect public fixture/public manifest metadata and derive dry-run file/size summaries.[3][5][13][17][18][19]
+- `public-catalog-service.ts`: fetch/cache `UplayManifests` datasets and build searchable config/title indexes.[11][12][13][14][15]
 
 ### `src/models/`
 
 Normalized domain types independent of raw upstream payloads.
 
-Planned types:
+Current key types:
 
 - `Session`
 - `AccountIdentity`
 - `LibraryItem`
+- `SearchResult`
 - `ProductInfo`
+- `AddonInfo`
 - `ManifestInfo`
-- `ValidationStatus`
+- `DownloadPlan`
 
 Rationale: raw reverse-engineered payloads are unstable, so commands should speak in stable internal models.[1][4][6]
 
@@ -99,20 +103,28 @@ Planned modules:
 3. If that succeeds, normalize `OwnedGame` entries into `LibraryItem` records.
 4. If Demux fails, try GraphQL `viewer.games` as an explicitly weaker fallback.[6][9]
 
+### `ubi search <text>`
+
+1. Load the owned library summary and normalize titles.
+2. Search the parsed public product-config title index.
+3. Merge owned and public hits into a single de-duplicated result list.
+4. Use the returned product IDs to drive `ubi info`, `ubi addons`, or `ubi manifest`.
+
 ### `ubi info <title-or-id>`
 
 Resolution order:
 
 1. library cache/live library lookup if authenticated
 2. numeric product ID lookup in public datasets
-3. optional fuzzy name resolution among authenticated library items
+3. optional exact public title resolution when the catalog match is unique
+4. otherwise instruct the operator to use `ubi search <text>` for ambiguity
 
 Hydration order:
 
 1. live `OwnedGame.configuration` / live product-config request if available.[4]
 2. public `productservice.json` + `productconfig.json` fallback.[14][15]
 
-### `ubi manifest <title-or-id>`
+### `ubi manifest <title-or-id>` / `ubi files <title-or-id>` / `ubi download-plan <title-or-id>`
 
 Preferred path:
 
@@ -125,7 +137,15 @@ Fallback path:
 
 1. resolve known manifest hashes from `manifestlist.json`.[13]
 2. if a public raw fixture exists, parse it locally for fixture-based validation.[17][18]
-3. otherwise report that only manifest-hash inspection is currently available.
+3. derive file lists and dry-run byte totals from the parsed fixture when requested.[3][17][19]
+4. otherwise report that only manifest-hash inspection is currently available.
+
+### `ubi addons <title-or-id>`
+
+1. Resolve the base product.
+2. Read `ProductAssociations` from the public catalog entry.[12]
+3. Hydrate each associated product with whatever public title/type/manifest data is available.[12][14][15]
+4. Clearly label the result as a public association graph, not as a live ownership proof.[19]
 
 ## Error handling model
 
