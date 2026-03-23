@@ -1,12 +1,14 @@
 import process from 'node:process';
 import type { Command } from 'commander';
 import { AuthService } from '../core/auth-service';
+import { DemuxClient } from '../core/demux-client';
 import { HttpClient } from '../core/http';
 import type { DownloadPlan } from '../models/manifest';
 import { LibraryService } from '../services/library-service';
 import { ManifestService } from '../services/manifest-service';
 import { ProductService } from '../services/product-service';
 import { PublicCatalogService } from '../services/public-catalog-service';
+import { DemuxService } from '../services/demux-service';
 import type { CliContext } from './context';
 
 function renderHuman(plan: DownloadPlan): string {
@@ -54,6 +56,16 @@ function buildManifestService(context: CliContext): ManifestService {
     httpClient
   );
   const product = new ProductService(library, catalog);
+  const demux = new DemuxService(
+    context.paths,
+    context.config,
+    context.logger.child('demux'),
+    catalog,
+    product,
+    auth,
+    new DemuxClient(context.config, context.logger.child('demux-client')),
+    httpClient
+  );
 
   return new ManifestService(
     context.paths,
@@ -61,6 +73,7 @@ function buildManifestService(context: CliContext): ManifestService {
     context.logger.child('manifest'),
     product,
     catalog,
+    demux,
     httpClient
   );
 }
@@ -72,19 +85,34 @@ export function registerDownloadPlanCommand(
   program
     .command('download-plan <titleOrId>')
     .description(
-      'Show an experimental dry-run download/install plan from a parsed public manifest fixture'
+      'Show a dry-run download/install plan from a public fixture or a live Demux manifest'
     )
     .option('--json', 'Output JSON')
-    .action(async (titleOrId: string, options: { json?: boolean }) => {
-      const context = await makeContext();
-      const manifestService = buildManifestService(context);
-      const plan = await manifestService.getDownloadPlan(titleOrId);
+    .option(
+      '--live',
+      'Use live Demux/download-service retrieval instead of the public fixture path'
+    )
+    .action(
+      async (
+        titleOrId: string,
+        options: { json?: boolean; live?: boolean }
+      ) => {
+        const context = await makeContext();
+        const manifestService = buildManifestService(context);
+        try {
+          const plan = options.live
+            ? await manifestService.getLiveDownloadPlan(titleOrId)
+            : await manifestService.getDownloadPlan(titleOrId);
 
-      if (options.json) {
-        process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
-        return;
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
+            return;
+          }
+
+          process.stdout.write(`${renderHuman(plan)}\n`);
+        } finally {
+          await manifestService.destroy();
+        }
       }
-
-      process.stdout.write(`${renderHuman(plan)}\n`);
-    });
+    );
 }

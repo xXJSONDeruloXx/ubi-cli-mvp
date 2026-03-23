@@ -134,6 +134,21 @@ export class PublicCatalogService {
     };
   }
 
+  public async findUniqueCatalogProductByAppId(
+    appId: string
+  ): Promise<CatalogProductMatch | undefined> {
+    const entries = await this.getProductService();
+    const matches = entries.filter((entry) => entry.AppId === appId);
+    const uniqueProductIds = [
+      ...new Set(matches.map((entry) => entry.ProductId))
+    ];
+    if (uniqueProductIds.length !== 1) {
+      return undefined;
+    }
+
+    return this.describeCatalogProductById(uniqueProductIds[0]);
+  }
+
   public async findUniqueCatalogProductByTitle(
     title: string
   ): Promise<CatalogProductMatch | undefined> {

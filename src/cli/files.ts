@@ -1,12 +1,14 @@
 import process from 'node:process';
 import type { Command } from 'commander';
 import { AuthService } from '../core/auth-service';
+import { DemuxClient } from '../core/demux-client';
 import { HttpClient } from '../core/http';
 import type { ManifestFileEntry } from '../models/manifest';
 import { LibraryService } from '../services/library-service';
 import { ManifestService } from '../services/manifest-service';
 import { ProductService } from '../services/product-service';
 import { PublicCatalogService } from '../services/public-catalog-service';
+import { DemuxService } from '../services/demux-service';
 import type { CliContext } from './context';
 
 function renderHuman(items: ManifestFileEntry[]): string {
@@ -50,6 +52,16 @@ function buildManifestService(context: CliContext): ManifestService {
     httpClient
   );
   const product = new ProductService(library, catalog);
+  const demux = new DemuxService(
+    context.paths,
+    context.config,
+    context.logger.child('demux'),
+    catalog,
+    product,
+    auth,
+    new DemuxClient(context.config, context.logger.child('demux-client')),
+    httpClient
+  );
 
   return new ManifestService(
     context.paths,
@@ -57,6 +69,7 @@ function buildManifestService(context: CliContext): ManifestService {
     context.logger.child('manifest'),
     product,
     catalog,
+    demux,
     httpClient
   );
 }
@@ -68,29 +81,38 @@ export function registerFilesCommand(
   program
     .command('files <titleOrId>')
     .description(
-      'List manifest file entries for a Ubisoft title using a public raw manifest fixture when available'
+      'List manifest file entries for a Ubisoft title using public fixtures or live Demux retrieval'
     )
     .option('--json', 'Output JSON')
+    .option(
+      '--live',
+      'Use live Demux/download-service retrieval instead of the public fixture path'
+    )
     .option('--limit <n>', 'Limit the number of files shown', '25')
     .action(
       async (
         titleOrId: string,
-        options: { json?: boolean; limit?: string }
+        options: { json?: boolean; live?: boolean; limit?: string }
       ) => {
         const context = await makeContext();
         const manifestService = buildManifestService(context);
-        const limit = Number.parseInt(options.limit ?? '25', 10);
-        const items = (await manifestService.getManifestFiles(titleOrId)).slice(
-          0,
-          Number.isNaN(limit) ? 25 : limit
-        );
+        try {
+          const limit = Number.parseInt(options.limit ?? '25', 10);
+          const items = (
+            options.live
+              ? await manifestService.getLiveManifestFiles(titleOrId)
+              : await manifestService.getManifestFiles(titleOrId)
+          ).slice(0, Number.isNaN(limit) ? 25 : limit);
 
-        if (options.json) {
-          process.stdout.write(`${JSON.stringify(items, null, 2)}\n`);
-          return;
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify(items, null, 2)}\n`);
+            return;
+          }
+
+          process.stdout.write(`${renderHuman(items)}\n`);
+        } finally {
+          await manifestService.destroy();
         }
-
-        process.stdout.write(`${renderHuman(items)}\n`);
       }
     );
 }

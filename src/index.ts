@@ -8,6 +8,9 @@ import { registerConfigCommand } from './cli/config-show';
 import { createCliContext } from './cli/context';
 import { registerDoctorCommand } from './cli/doctor';
 import { registerDownloadPlanCommand } from './cli/download-plan';
+import { registerDownloadUrlsCommand } from './cli/download-urls';
+import { registerDemuxInfoCommand } from './cli/demux-info';
+import { registerDemuxListCommand } from './cli/demux-list';
 import { registerFilesCommand } from './cli/files';
 import { registerInfoCommand } from './cli/info';
 import { registerListCommand } from './cli/list';
@@ -30,11 +33,14 @@ async function main(): Promise<void> {
 
   registerAuthCommands(program, makeContext);
   registerListCommand(program, makeContext);
+  registerDemuxListCommand(program, makeContext);
   registerSearchCommand(program, makeContext);
   registerInfoCommand(program, makeContext);
+  registerDemuxInfoCommand(program, makeContext);
   registerManifestCommand(program, makeContext);
   registerFilesCommand(program, makeContext);
   registerDownloadPlanCommand(program, makeContext);
+  registerDownloadUrlsCommand(program, makeContext);
   registerAddonsCommand(program, makeContext);
   registerDoctorCommand(program, makeContext);
   registerConfigCommand(program, makeContext);

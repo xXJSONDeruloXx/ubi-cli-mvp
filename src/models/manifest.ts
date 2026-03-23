@@ -26,7 +26,14 @@ export interface ManifestInfo {
   selectedManifestHash?: string;
   parsedManifest?: ParsedManifestSummary;
   rawFixtureUrl?: string;
-  status: 'parsed-public-fixture' | 'hashes-only' | 'blocked';
+  rawSourceUrl?: string;
+  metadataUrl?: string;
+  licensesUrl?: string;
+  status:
+    | 'parsed-public-fixture'
+    | 'parsed-live-demux'
+    | 'hashes-only'
+    | 'blocked';
   notes: string[];
 }
 

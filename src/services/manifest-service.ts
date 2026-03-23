@@ -1,5 +1,7 @@
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { HttpClient } from '../core/http';
+import { loadUbisoftDemuxModule } from '../core/ubisoft-demux-loader';
 import type { AppPaths, RuntimeConfig } from '../models/config';
 import type {
   DownloadPlan,
@@ -8,17 +10,19 @@ import type {
   ParsedManifestSummary
 } from '../models/manifest';
 import type { Logger } from '../util/logger';
-import { HttpClient } from '../core/http';
-import { loadUbisoftDemuxModule } from '../core/ubisoft-demux-loader';
+import type { DemuxService } from './demux-service';
 import type { ProductService } from './product-service';
 import type { PublicCatalogService } from './public-catalog-service';
 
-interface LoadedManifestFixture {
+interface LoadedManifestSource {
   title: string;
   productId?: number;
   manifestHashes: string[];
   selectedManifestHash?: string;
   rawFixtureUrl?: string;
+  rawSourceUrl?: string;
+  metadataUrl?: string;
+  licensesUrl?: string;
   status: ManifestInfo['status'];
   notes: string[];
   parsed?: unknown;
@@ -138,6 +142,7 @@ export class ManifestService {
     logger: Logger,
     private readonly productService: ProductService,
     private readonly publicCatalog: PublicCatalogService,
+    private readonly demuxService?: DemuxService,
     httpClient?: HttpClient
   ) {
     this.httpClient =
@@ -145,7 +150,36 @@ export class ManifestService {
   }
 
   public async getManifestInfo(query: string): Promise<ManifestInfo> {
-    const loaded = await this.loadManifestFixture(query);
+    return this.toManifestInfo(await this.loadPublicManifestFixture(query));
+  }
+
+  public async getLiveManifestInfo(query: string): Promise<ManifestInfo> {
+    return this.toManifestInfo(await this.loadLiveManifest(query));
+  }
+
+  public async getManifestFiles(query: string): Promise<ManifestFileEntry[]> {
+    return this.toManifestFiles(await this.loadPublicManifestFixture(query));
+  }
+
+  public async getLiveManifestFiles(
+    query: string
+  ): Promise<ManifestFileEntry[]> {
+    return this.toManifestFiles(await this.loadLiveManifest(query));
+  }
+
+  public async getDownloadPlan(query: string): Promise<DownloadPlan> {
+    return this.toDownloadPlan(await this.loadPublicManifestFixture(query));
+  }
+
+  public async getLiveDownloadPlan(query: string): Promise<DownloadPlan> {
+    return this.toDownloadPlan(await this.loadLiveManifest(query));
+  }
+
+  public async destroy(): Promise<void> {
+    await this.demuxService?.destroy();
+  }
+
+  private toManifestInfo(loaded: LoadedManifestSource): ManifestInfo {
     if (!loaded.parsed || !loaded.selectedManifestHash) {
       return {
         title: loaded.title,
@@ -153,6 +187,9 @@ export class ManifestService {
         manifestHashes: loaded.manifestHashes,
         selectedManifestHash: loaded.selectedManifestHash,
         rawFixtureUrl: loaded.rawFixtureUrl,
+        rawSourceUrl: loaded.rawSourceUrl,
+        metadataUrl: loaded.metadataUrl,
+        licensesUrl: loaded.licensesUrl,
         status: loaded.status,
         notes: loaded.notes
       };
@@ -168,13 +205,15 @@ export class ManifestService {
         loaded.selectedManifestHash
       ),
       rawFixtureUrl: loaded.rawFixtureUrl,
+      rawSourceUrl: loaded.rawSourceUrl,
+      metadataUrl: loaded.metadataUrl,
+      licensesUrl: loaded.licensesUrl,
       status: loaded.status,
       notes: loaded.notes
     };
   }
 
-  public async getManifestFiles(query: string): Promise<ManifestFileEntry[]> {
-    const loaded = await this.loadManifestFixture(query);
+  private toManifestFiles(loaded: LoadedManifestSource): ManifestFileEntry[] {
     if (!loaded.parsed) {
       return [];
     }
@@ -184,9 +223,9 @@ export class ManifestService {
     );
   }
 
-  public async getDownloadPlan(query: string): Promise<DownloadPlan> {
-    const info = await this.getManifestInfo(query);
-    const files = await this.getManifestFiles(query);
+  private toDownloadPlan(loaded: LoadedManifestSource): DownloadPlan {
+    const info = this.toManifestInfo(loaded);
+    const files = this.toManifestFiles(loaded);
 
     return {
       title: info.title,
@@ -202,9 +241,33 @@ export class ManifestService {
     };
   }
 
-  private async loadManifestFixture(
+  private async loadLiveManifest(query: string): Promise<LoadedManifestSource> {
+    if (!this.demuxService) {
+      throw new Error('Live Demux manifest support was not configured.');
+    }
+
+    const liveManifest = await this.demuxService.parseLiveManifest(query);
+    return {
+      title: liveManifest.download.game.title,
+      productId:
+        liveManifest.download.game.publicProductId ??
+        liveManifest.download.game.demuxProductId,
+      manifestHashes: [liveManifest.download.manifestHash],
+      selectedManifestHash: liveManifest.download.manifestHash,
+      rawSourceUrl: liveManifest.download.manifestUrl,
+      metadataUrl: liveManifest.download.metadataUrl,
+      licensesUrl: liveManifest.download.licensesUrl,
+      status: 'parsed-live-demux',
+      notes: [
+        'Manifest data came from a live Demux download-service URL for an owned product.'
+      ],
+      parsed: liveManifest.parsed
+    };
+  }
+
+  private async loadPublicManifestFixture(
     query: string
-  ): Promise<LoadedManifestFixture> {
+  ): Promise<LoadedManifestSource> {
     const resolved = await this.productService.resolveProduct(query);
     const manifestHashes = resolved.info.manifestHashes;
 
