@@ -13,18 +13,22 @@ This MVP uses **TypeScript on Node.js LTS** with a thin CLI layer and explicit s
 ## Module boundaries
 
 ### `src/cli/`
+
 Thin commander-based command definitions.
 
 Responsibilities:
+
 - parse flags and arguments
 - select output mode (human vs JSON)
 - map errors to exit codes
 - keep business logic out of command handlers
 
 ### `src/core/`
+
 Cross-cutting runtime and protocol primitives.
 
 Planned modules:
+
 - `config.ts`: resolve config/cache paths
 - `session-store.ts`: read/write/redact session state
 - `http.ts`: HTTP client, retries, timeouts, JSON helpers
@@ -34,18 +38,22 @@ Planned modules:
 Rationale: public sources show that HTTP sessions and Demux tickets are related but distinct concerns, so the MVP keeps them in separate core components.[1][2][4][9]
 
 ### `src/services/`
+
 Use-case-oriented workflows on top of the core layer.
 
 Planned modules:
+
 - `library-service.ts`: owned titles via Demux first, GraphQL fallback second.[4][6][9]
 - `product-service.ts`: resolve a product by ID/name and hydrate metadata from live or public sources.[4][14][15]
 - `manifest-service.ts`: fetch/parse manifests live when possible; otherwise inspect public fixture/public manifest metadata.[3][5][13][17][18]
 - `public-catalog-service.ts`: fetch/cache `UplayManifests` datasets.[11][12][13][14][15]
 
 ### `src/models/`
+
 Normalized domain types independent of raw upstream payloads.
 
 Planned types:
+
 - `Session`
 - `AccountIdentity`
 - `LibraryItem`
@@ -56,9 +64,11 @@ Planned types:
 Rationale: raw reverse-engineered payloads are unstable, so commands should speak in stable internal models.[1][4][6]
 
 ### `src/util/`
+
 Helpers that do not belong to transport or domain logic.
 
 Planned modules:
+
 - `logger.ts`
 - `redaction.ts`
 - `output.ts`
@@ -92,23 +102,27 @@ Planned modules:
 ### `ubi info <title-or-id>`
 
 Resolution order:
+
 1. library cache/live library lookup if authenticated
 2. numeric product ID lookup in public datasets
 3. optional fuzzy name resolution among authenticated library items
 
 Hydration order:
+
 1. live `OwnedGame.configuration` / live product-config request if available.[4]
 2. public `productservice.json` + `productconfig.json` fallback.[14][15]
 
 ### `ubi manifest <title-or-id>`
 
 Preferred path:
+
 1. resolve product ID and manifest hash from live ownership data.[4]
 2. request an ownership token.[4]
 3. initialize download service and request manifest/metadata/license URLs.[5]
 4. download payloads and parse them with the documented parser format.[3]
 
 Fallback path:
+
 1. resolve known manifest hashes from `manifestlist.json`.[13]
 2. if a public raw fixture exists, parse it locally for fixture-based validation.[17][18]
 3. otherwise report that only manifest-hash inspection is currently available.
@@ -140,6 +154,7 @@ The repo uses typed, user-facing error classes.
 Default path: platform-specific user config directory via `env-paths`, under `ubi-cli-mvp/`.
 
 Files:
+
 - `config.json`: non-secret settings such as app IDs, verbosity defaults, and cache settings
 - `session.json`: persisted session metadata and tickets (redacted in logs)
 - `cache/*.json`: cached public dataset snapshots from `UplayManifests`
@@ -148,6 +163,7 @@ Files:
 ### Security stance
 
 Public sources show workable remember-me and refresh flows, but not a simple cross-platform keychain strategy for this specific MVP.[2][9] Therefore:
+
 - the initial implementation stores sessions locally in the config directory;
 - the README and validation docs explicitly warn about local ticket storage; and
 - future keychain integration is deferred unless it can be added without destabilizing the MVP.

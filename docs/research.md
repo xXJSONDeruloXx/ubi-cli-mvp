@@ -11,18 +11,21 @@ This MVP targets the smallest publicly supportable subset of a “Legendary for 
 **Confirmed from source:** community reverse-engineering points to a split between a public HTTP API (`public-ubiservices.ubi.com`) and a socket/protobuf “Demux” API used by the launcher for core workflows.[1]
 
 Practical implication for this repo:
+
 - the MVP should keep HTTP session management separate from Demux transport; and
 - account/library/manifest features may need to mix both transports depending on what is available.[1]
 
 ### 2. Direct HTTP session creation is publicly documented by reverse-engineered clients
 
 **Confirmed from source:** one public TypeScript client creates sessions by `POST`ing to `https://public-ubiservices.ubi.com/v3/profiles/sessions` with:
+
 - `Authorization: Basic <base64(email:password)>`
 - `Ubi-AppId: <app id>`
 - `Ubi-RequestedPlatformType: uplay`
 - JSON body `{ "rememberMe": true }`.[2]
 
 The same source also shows:
+
 - 2FA completion via `Authorization: ubi_2fa_v1 t=<twoFactorAuthenticationTicket>` and a `Ubi-2faCode` header; and
 - remember-me login via `Authorization: rm_v1 t=<rememberMeTicket>`.[2]
 
@@ -31,6 +34,7 @@ The same source also shows:
 ### 3. Multiple public app IDs/genome IDs are used by existing community clients
 
 **Confirmed from source:** public reverse-engineered clients use more than one Ubisoft web app ID/genome ID pair, including:
+
 - `314d4fef-e568-454a-ae06-43e3bece12a6` / `85c31714-0941-4876-a18d-2c7e9dce8d40` in `ubi-cli`.[7]
 - `82b650c0-6cb3-40c0-9f41-25a53b62b206` / `42d07c95-9914-4450-8b38-267c4e462b21` in Lutris.[10]
 - `f68a4bb5-608a-4ff2-8123-be8ef797e0a6` in `ubisoft-demux-node`’s HTTP helper.[2]
@@ -42,12 +46,14 @@ The same source also shows:
 **Confirmed from source:** Demux authentication can be done with a `ubiTicket` token after obtaining an HTTP session ticket.[1]
 
 **Confirmed from source:** a public C# implementation initializes the `ownership_service` with:
+
 - `InitializeReq { getAssociations = true, protoVersion = 7, useStaging = false }`
 - `UbiSessionId = <sessionId>`
 - `UbiTicket = <ticket>`
-and treats the response as the owned-games list.[4]
+  and treats the response as the owned-games list.[4]
 
 **Confirmed from source:** the generated ownership model in `ubisoft-demux-node` includes fields useful for an MVP, such as:
+
 - `productId`
 - `latestManifest`
 - `gameCode`
@@ -83,6 +89,7 @@ and treats the response as the owned-games list.[4]
 **Confirmed from source:** the `UplayManifests` repository explicitly describes itself as a community-maintained collection of Ubisoft manifests and related product data.[11]
 
 **Confirmed from source:** its published JSON files provide:
+
 - `gamelist.json`: product IDs and product types.[12]
 - `manifestlist.json`: product ID to manifest-hash mappings.[13]
 - `productservice.json`: product ID to `SpaceId`/`AppId` mappings.[14]
