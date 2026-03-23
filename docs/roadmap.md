@@ -80,3 +80,4 @@ Exit criteria:
 - 2026-03-23: Corrected download-service URL-response normalization for multi-path slice requests by grouping returned CDN URLs by parsed pathname instead of assuming one response row per requested path.
 - 2026-03-23: Fixed `extract-file` for live multi-slice files whose parsed `sliceList[].fileOffset` values materialize as protobuf default zeroes; the extractor now falls back to sequential offsets in that case and validates decompressed slice SHA-1 values against manifest `slices[]` hashes.
 - 2026-03-23: Added `extract-files` for experimental batch reconstruction of multiple matching live manifest files, sharing slice downloads across the batch when possible.
+- 2026-03-23: Added normalized manifest-path matching helpers and `files --match/--prefix` filtering so live manifests can be narrowed down before extraction.

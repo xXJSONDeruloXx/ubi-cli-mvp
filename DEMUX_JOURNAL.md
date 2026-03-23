@@ -90,6 +90,9 @@ Completed after the breakthrough:
 - The repo now also supports experimental **batch** extraction for multiple matching files from one live manifest query:
   - `extract-files <query> <pathFilter> [--prefix]`
   - it resolves slice URLs once for the matched set and reuses already-downloaded slice payloads across files when possible.
+- To make that workflow easier, the CLI now also supports normalized live manifest-path filtering in `files`:
+  - `files <query> --live --match <pathFilter> [--prefix]`
+  - slash style and casing are normalized so Windows-style manifest paths can be queried with either `\\` or `/` separators.
 - Live validation on Origins with `extract-files 3539 'Support\\Readme' --prefix --limit 3` reconstructed three readme files into one output tree with:
   - `matchedCount: 15`
   - `extractedCount: 3`

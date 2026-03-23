@@ -147,6 +147,7 @@ node dist/index.js manifest 3539 --live --with-assets
 ```bash
 node dist/index.js files 46 --limit 10
 node dist/index.js files 3539 --live --limit 10
+node dist/index.js files 3539 --live --match 'Support\\Readme' --prefix --limit 5
 node dist/index.js download-plan 46
 node dist/index.js download-plan 3539 --live
 ```
