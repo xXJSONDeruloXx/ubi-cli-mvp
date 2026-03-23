@@ -43,7 +43,7 @@ Use-case-oriented workflows on top of the core layer.
 
 Current modules:
 
-- `library-service.ts`: owned titles via GraphQL plus normalization/deduping helpers; a Demux-backed path is now validated experimentally and is the next implementation target for richer ownership/install metadata.[4][6][9][19][20]
+- `library-service.ts`: owned titles via GraphQL plus normalization/deduping helpers; this remains the default user-facing list path while Demux ownership is exposed through dedicated commands and live-manifest flows.[4][6][9][19][20]
 - `search-service.ts`: merge owned-library matches with public catalog matches to disambiguate product IDs, editions, and DLC-like entries.[12][14][15]
 - `product-service.ts`: resolve a product by ID/name and hydrate metadata from live or public sources.[4][14][15]
 - `addon-service.ts`: expose public associated products from the catalog graph for DLC exploration, without claiming ownership.[12][19]
@@ -192,6 +192,12 @@ Public sources show workable remember-me and refresh flows, but not a simple cro
 
 - **Milestone 0:** docs already map cleanly to module boundaries.
 - **Milestone 1:** config, logger, doctor, and CLI can be built independently of Ubisoft auth.
+- **Milestone 2:** auth/session lives entirely in `src/core/` with isolated tests.[2][9]
+- **Milestone 3:** library enumeration can compare Demux and GraphQL without changing CLI surface area.[4][6][9]
+- **Milestone 4:** manifest parsing can be validated first with public fixtures, then with live downloads if auth works.[3][5][17][18]
+- **Milestone 5:** validation docs can state per-capability evidence because each service has a narrow source-backed responsibility.
+  each service has a narrow source-backed responsibility.
+  tly of Ubisoft auth.
 - **Milestone 2:** auth/session lives entirely in `src/core/` with isolated tests.[2][9]
 - **Milestone 3:** library enumeration can compare Demux and GraphQL without changing CLI surface area.[4][6][9]
 - **Milestone 4:** manifest parsing can be validated first with public fixtures, then with live downloads if auth works.[3][5][17][18]

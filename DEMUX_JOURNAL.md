@@ -32,10 +32,32 @@ Demux works, but product reconciliation is still messy:
 - `SpaceId` and `AppId` are better reconciliation keys than title alone.
 - Some owned/installable Demux entries expose a `latestManifest`; many entitlement-style rows do not.
 
-### Next implementation targets
+### Implementation progress
 
-1. build a first-class Demux client wrapper in `src/core/`
-2. normalize Demux owned-game data into repo models
-3. expose Demux-backed list/info/manifest/download-url flows in the CLI
-4. add test coverage for handshake sequencing and normalization
-5. document every validated capability and every remaining blocker honestly
+Completed after the breakthrough:
+
+1. built a first-class Demux client wrapper in `src/core/demux-client.ts`
+2. normalized Demux owned-game data into repo models and a `DemuxService`
+3. exposed Demux-backed CLI commands:
+   - `ubi demux-list`
+   - `ubi demux-info <query>`
+   - `ubi download-urls <query>`
+   - `ubi manifest <query> --live`
+   - `ubi files <query> --live`
+   - `ubi download-plan <query> --live`
+4. added test coverage for:
+   - handshake sequencing
+   - ownership/download-service flows
+   - Demux normalization/reconciliation
+   - live-manifest service plumbing
+
+### Current blocker frontier
+
+The main remaining blocker is no longer basic Demux connectivity.
+
+It is now the gap between **manifest/URL retrieval** and a full **chunk downloader / installer**:
+
+- some titles do not expose a useful `latestManifest`
+- public/catalog product IDs do not always align 1:1 with Demux ownership IDs
+- the CLI does not yet reconstruct slice/chunk payloads into installed game files
+- update/resume/install-state orchestration is still unimplemented

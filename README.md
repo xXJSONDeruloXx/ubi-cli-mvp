@@ -124,21 +124,37 @@ node dist/index.js info "Assassin's Creed® Unity"
 node dist/index.js info 720 --json
 ```
 
-### 6. Inspect manifest metadata
+### 6. Inspect Demux-owned products directly
+
+```bash
+node dist/index.js demux-list --search origins
+node dist/index.js demux-info 3539
+```
+
+### 7. Inspect manifest metadata
 
 ```bash
 node dist/index.js manifest 720
 node dist/index.js manifest 46 --json
+node dist/index.js manifest 3539 --live
 ```
 
-### 7. Inspect manifest file contents and a dry-run download plan
+### 8. Inspect manifest file contents and a dry-run download plan
 
 ```bash
 node dist/index.js files 46 --limit 10
+node dist/index.js files 3539 --live --limit 10
 node dist/index.js download-plan 46
+node dist/index.js download-plan 3539 --live
 ```
 
-### 8. Explore associated products / DLC-like entries
+### 9. Inspect live signed Demux download URLs
+
+```bash
+node dist/index.js download-urls 3539
+```
+
+### 10. Explore associated products / DLC-like entries
 
 ```bash
 node dist/index.js addons 720 --limit 10
