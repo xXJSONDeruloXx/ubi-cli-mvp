@@ -3,6 +3,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadUbisoftDemuxModule } from '../src/core/ubisoft-demux-loader';
 import {
+  filterManifestFiles,
+  summarizeManifestFileSubset,
   summarizeParsedLicenses,
   summarizeParsedManifest,
   summarizeParsedMetadata,
@@ -73,6 +75,46 @@ describe('manifest summary helpers', () => {
       localeCount: 3,
       identifiers: ['eula', 'privacy'],
       languageCodes: ['en-US', 'fr-FR']
+    });
+  });
+
+  it('filters manifest files by normalized path and summarizes the subset', () => {
+    const files = filterManifestFiles(
+      [
+        {
+          path: 'Support\\Readme\\English\\Readme.txt',
+          installBytes: '10',
+          downloadBytes: '4',
+          sliceCount: 1,
+          isDirectory: false
+        },
+        {
+          path: 'Support\\Readme\\French\\Readme.txt',
+          installBytes: '20',
+          downloadBytes: '6',
+          sliceCount: 1,
+          isDirectory: false
+        },
+        {
+          path: 'bin\\game.exe',
+          installBytes: '100',
+          downloadBytes: '70',
+          sliceCount: 3,
+          isDirectory: false
+        }
+      ],
+      'support/readme',
+      true
+    );
+
+    expect(files.map((file) => file.path)).toEqual([
+      'Support\\Readme\\English\\Readme.txt',
+      'Support\\Readme\\French\\Readme.txt'
+    ]);
+    expect(summarizeManifestFileSubset(files)).toEqual({
+      installBytes: '30',
+      downloadBytes: '10',
+      fileCount: 2
     });
   });
 });

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { zstdCompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { DemuxService } from '../src/services/demux-service';
@@ -287,6 +287,118 @@ describe('demux service', () => {
       downloadedCount: 1
     });
     expect(result.files[0]?.bytes).toBe(11);
+    expect(result.notes[0]).toContain('networkFetches=1');
+  });
+
+  it('reuses the persistent slice cache across repeated extraction runs', async () => {
+    await rm('/tmp/ubi-demux-cache-test', { recursive: true, force: true });
+
+    const compressedSlice = zstdCompressSync(Buffer.from('cached payload'));
+    let fetchCount = 0;
+    const service = new DemuxService(
+      {
+        cacheDir: '/tmp/ubi-demux-cache-test',
+        debugDir: '/tmp',
+        sessionFile: '/tmp/session.json'
+      } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined }),
+        debug: () => undefined
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'ticket',
+            sessionId: 'session',
+            userId: 'user'
+          })
+      } as never,
+      {
+        getDownloadUrlsForRelativePaths: (
+          _session: unknown,
+          _productId: number,
+          relativePaths: string[]
+        ) =>
+          Promise.resolve({
+            responses: relativePaths.map((relativePath) => ({
+              result: 0,
+              relativePath,
+              urls: [`https://example.test/${relativePath}`]
+            }))
+          })
+      } as never,
+      {
+        requestRaw: () => {
+          fetchCount += 1;
+          return Promise.resolve({
+            status: 200,
+            body: compressedSlice
+          });
+        }
+      } as never
+    );
+
+    Object.assign(service as object, {
+      parseLiveManifest: () =>
+        Promise.resolve({
+          download: {
+            game: {
+              title: 'Far Cry® 3',
+              demuxProductId: 46,
+              publicProductId: 46
+            },
+            manifestHash: 'LIVEHASH'
+          },
+          parsed: {
+            chunks: [
+              {
+                files: [
+                  {
+                    name: 'bin/cache.txt',
+                    size: 14,
+                    isDir: false,
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '1111111111111111111111111111111111111111',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: 14
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        })
+    });
+
+    const first = await service.extractFile(
+      '46',
+      'bin/cache.txt',
+      '/tmp/ubi-extract-cache-test/first.txt'
+    );
+    const second = await service.extractFile(
+      '46',
+      'bin/cache.txt',
+      '/tmp/ubi-extract-cache-test/second.txt'
+    );
+
+    expect(fetchCount).toBe(1);
+    expect(first.notes[1]).toContain('networkFetches=1');
+    expect(second.notes[1]).toContain('diskCacheHits=1');
+    expect(
+      await readFile('/tmp/ubi-extract-cache-test/second.txt', 'utf8')
+    ).toBe('cached payload');
   });
 
   it('experimentally reconstructs a manifest file by downloading and stitching decompressed slices', async () => {
@@ -682,6 +794,6 @@ describe('demux service', () => {
       'bin/shared-plus.txt',
       'bin/shared.txt'
     ]);
-    expect(result.notes[1]).toContain('reuses downloaded slices');
+    expect(result.notes[2]).toContain('reuses downloaded slices');
   });
 });

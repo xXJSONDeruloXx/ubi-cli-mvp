@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
 import { AuthService } from '../core/auth-service';
@@ -94,7 +94,11 @@ interface SliceResponseEntry {
 }
 
 interface ExtractionCache {
-  decompressedByPath: Map<string, Buffer>;
+  decompressedByHash: Map<string, Buffer>;
+  compressedByHash: Map<string, Buffer>;
+  diskCacheHitCount: number;
+  memoryReuseHitCount: number;
+  networkFetchCount: number;
 }
 
 interface PreparedLiveManifestExtraction {
@@ -381,39 +385,35 @@ export class DemuxService {
       );
     await mkdir(resolvedOutputDir, { recursive: true });
 
+    const transferCache: ExtractionCache = {
+      decompressedByHash: new Map<string, Buffer>(),
+      compressedByHash: new Map<string, Buffer>(),
+      diskCacheHitCount: 0,
+      memoryReuseHitCount: 0,
+      networkFetchCount: 0
+    };
     const files = [] as DemuxSliceDownloadResult['files'];
     for (const entry of sliceUrls.urls) {
-      let successfulUrl: string | undefined;
-      let body: Buffer | undefined;
-      let lastStatus: number | undefined;
-
-      for (const url of entry.urls) {
-        const response = await this.httpClient.requestRaw(url, {
-          retryCount: 0,
-          timeoutMs: 60000
-        });
-        lastStatus = response.status;
-        if (response.status === 200) {
-          successfulUrl = url;
-          body = Buffer.from(response.body);
-          break;
-        }
-      }
-
-      if (!successfulUrl || !body) {
+      const sliceHash = entry.relativePath.split('/').at(-1)?.toUpperCase();
+      if (!sliceHash) {
         throw new Error(
-          `Fetching slice ${entry.relativePath} failed for all candidate URLs${lastStatus !== undefined ? ` (last HTTP ${lastStatus})` : ''}.`
+          `Slice path ${entry.relativePath} did not contain a hash.`
         );
       }
 
+      const fetched = await this.fetchCompressedSlice(
+        entry,
+        sliceHash,
+        transferCache
+      );
       const fileName = entry.relativePath.split('/').at(-1) ?? 'slice.bin';
       const filePath = path.join(resolvedOutputDir, `${fileName}.slice`);
-      await writeFile(filePath, body);
+      await writeFile(filePath, fetched.body);
       files.push({
         relativePath: entry.relativePath,
         filePath,
-        bytes: body.length,
-        url: successfulUrl
+        bytes: fetched.body.length,
+        url: fetched.source
       });
     }
 
@@ -426,6 +426,7 @@ export class DemuxService {
       downloadedCount: files.length,
       files,
       notes: [
+        this.describeSliceTransferStats(transferCache),
         'This command downloads raw slice payloads only. It does not reconstruct final installed game files yet.'
       ]
     };
@@ -467,11 +468,18 @@ export class DemuxService {
         file.name.replaceAll('\\', path.sep)
       );
 
+    const transferCache: ExtractionCache = {
+      decompressedByHash: new Map<string, Buffer>(),
+      compressedByHash: new Map<string, Buffer>(),
+      diskCacheHitCount: 0,
+      memoryReuseHitCount: 0,
+      networkFetchCount: 0
+    };
     const extracted = await this.extractManifestFileToPath(
       file,
       resolvedOutputPath,
       responsesByHash,
-      { decompressedByPath: new Map<string, Buffer>() }
+      transferCache
     );
 
     return {
@@ -488,6 +496,7 @@ export class DemuxService {
         extracted.validatedSliceHashCount > 0
           ? `Validated ${extracted.validatedSliceHashCount} decompressed slice SHA-1 values against manifest file hashes.`
           : 'Manifest file did not expose per-slice decompressed SHA-1 hashes for validation.',
+        this.describeSliceTransferStats(transferCache),
         'This command experimentally reconstructs a single manifest file from live slice payloads. It is not a full installer/update engine yet.'
       ]
     };
@@ -546,7 +555,11 @@ export class DemuxService {
         `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`
       );
     const cache: ExtractionCache = {
-      decompressedByPath: new Map<string, Buffer>()
+      decompressedByHash: new Map<string, Buffer>(),
+      compressedByHash: new Map<string, Buffer>(),
+      diskCacheHitCount: 0,
+      memoryReuseHitCount: 0,
+      networkFetchCount: 0
     };
 
     let bytesDownloaded = 0;
@@ -594,6 +607,7 @@ export class DemuxService {
         options.prefixMatch
           ? 'Matched files by normalized manifest-path prefix.'
           : 'Matched files by normalized manifest-path substring.',
+        this.describeSliceTransferStats(cache),
         'This command experimentally reconstructs multiple manifest files from live slice payloads and reuses downloaded slices across matching files when possible.'
       ]
     };
@@ -632,19 +646,51 @@ export class DemuxService {
     ];
   }
 
-  private async fetchDecompressedSlice(
+  private getSliceCachePath(sliceHash: string): string | undefined {
+    if (!this.paths.cacheDir) {
+      return undefined;
+    }
+
+    return path.join(this.paths.cacheDir, 'demux-slices', `${sliceHash}.slice`);
+  }
+
+  private describeSliceTransferStats(cache: ExtractionCache): string {
+    return `Slice transfer stats: networkFetches=${cache.networkFetchCount} | diskCacheHits=${cache.diskCacheHitCount} | inProcessReuseHits=${cache.memoryReuseHitCount}`;
+  }
+
+  private async fetchCompressedSlice(
     entry: SliceResponseEntry,
+    sliceHash: string,
     cache: ExtractionCache
-  ): Promise<{ body: Buffer; bytesDownloaded: number }> {
-    const cachedBody = cache.decompressedByPath.get(entry.relativePath);
-    if (cachedBody) {
+  ): Promise<{ body: Buffer; bytesDownloaded: number; source: string }> {
+    const inMemory = cache.compressedByHash.get(sliceHash);
+    if (inMemory) {
+      cache.memoryReuseHitCount += 1;
       return {
-        body: cachedBody,
-        bytesDownloaded: 0
+        body: inMemory,
+        bytesDownloaded: 0,
+        source: `memory-cache://${sliceHash}`
       };
     }
 
+    const cachePath = this.getSliceCachePath(sliceHash);
+    if (cachePath) {
+      try {
+        const cachedBody = await readFile(cachePath);
+        cache.compressedByHash.set(sliceHash, cachedBody);
+        cache.diskCacheHitCount += 1;
+        return {
+          body: cachedBody,
+          bytesDownloaded: 0,
+          source: `cache://${sliceHash}`
+        };
+      } catch {
+        // Fall back to network.
+      }
+    }
+
     let compressedBody: Buffer | undefined;
+    let successfulUrl: string | undefined;
     let lastStatus: number | undefined;
     for (const url of entry.urls) {
       const response = await this.httpClient.requestRaw(url, {
@@ -654,21 +700,50 @@ export class DemuxService {
       lastStatus = response.status;
       if (response.status === 200) {
         compressedBody = Buffer.from(response.body);
+        successfulUrl = url;
         break;
       }
     }
 
-    if (!compressedBody) {
+    if (!compressedBody || !successfulUrl) {
       throw new Error(
         `Fetching slice ${entry.relativePath} failed for all candidate URLs${lastStatus !== undefined ? ` (last HTTP ${lastStatus})` : ''}.`
       );
     }
 
-    const body = this.decompressSliceBody(compressedBody);
-    cache.decompressedByPath.set(entry.relativePath, body);
+    if (cachePath) {
+      await mkdir(path.dirname(cachePath), { recursive: true });
+      await writeFile(cachePath, compressedBody);
+    }
+    cache.compressedByHash.set(sliceHash, compressedBody);
+    cache.networkFetchCount += 1;
+    return {
+      body: compressedBody,
+      bytesDownloaded: compressedBody.length,
+      source: successfulUrl
+    };
+  }
+
+  private async fetchDecompressedSlice(
+    entry: SliceResponseEntry,
+    sliceHash: string,
+    cache: ExtractionCache
+  ): Promise<{ body: Buffer; bytesDownloaded: number }> {
+    const cachedBody = cache.decompressedByHash.get(sliceHash);
+    if (cachedBody) {
+      cache.memoryReuseHitCount += 1;
+      return {
+        body: cachedBody,
+        bytesDownloaded: 0
+      };
+    }
+
+    const compressed = await this.fetchCompressedSlice(entry, sliceHash, cache);
+    const body = this.decompressSliceBody(compressed.body);
+    cache.decompressedByHash.set(sliceHash, body);
     return {
       body,
-      bytesDownloaded: compressedBody.length
+      bytesDownloaded: compressed.bytesDownloaded
     };
   }
 
@@ -721,7 +796,11 @@ export class DemuxService {
           );
         }
 
-        const fetched = await this.fetchDecompressedSlice(responseEntry, cache);
+        const fetched = await this.fetchDecompressedSlice(
+          responseEntry,
+          sliceHash,
+          cache
+        );
         const decompressedBody = fetched.body;
         bytesDownloaded += fetched.bytesDownloaded;
 

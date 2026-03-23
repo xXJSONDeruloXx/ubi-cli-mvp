@@ -12,6 +12,7 @@ import type {
   ParsedMetadataSummary
 } from '../models/manifest';
 import type { Logger } from '../util/logger';
+import { manifestPathMatches } from '../util/manifest-paths';
 import type { DemuxService } from './demux-service';
 import type { ProductService } from './product-service';
 import type { PublicCatalogService } from './public-catalog-service';
@@ -188,6 +189,36 @@ export function toManifestFiles(parsed: {
     });
 }
 
+export function filterManifestFiles(
+  files: ManifestFileEntry[],
+  match: string | undefined,
+  prefixMatch = false
+): ManifestFileEntry[] {
+  if (!match) {
+    return files;
+  }
+
+  return files.filter((file) =>
+    manifestPathMatches(file.path, match, prefixMatch)
+  );
+}
+
+export function summarizeManifestFileSubset(files: ManifestFileEntry[]): {
+  installBytes: string;
+  downloadBytes: string;
+  fileCount: number;
+} {
+  return {
+    installBytes: files
+      .reduce((sum, file) => sum + BigInt(file.installBytes), 0n)
+      .toString(),
+    downloadBytes: files
+      .reduce((sum, file) => sum + BigInt(file.downloadBytes), 0n)
+      .toString(),
+    fileCount: files.length
+  };
+}
+
 export class ManifestService {
   private readonly httpClient: HttpClient;
 
@@ -225,12 +256,21 @@ export class ManifestService {
     return this.toManifestFiles(await this.loadLiveManifest(query));
   }
 
-  public async getDownloadPlan(query: string): Promise<DownloadPlan> {
-    return this.toDownloadPlan(await this.loadPublicManifestFixture(query));
+  public async getDownloadPlan(
+    query: string,
+    options: { match?: string; prefixMatch?: boolean } = {}
+  ): Promise<DownloadPlan> {
+    return this.toDownloadPlan(
+      await this.loadPublicManifestFixture(query),
+      options
+    );
   }
 
-  public async getLiveDownloadPlan(query: string): Promise<DownloadPlan> {
-    return this.toDownloadPlan(await this.loadLiveManifest(query));
+  public async getLiveDownloadPlan(
+    query: string,
+    options: { match?: string; prefixMatch?: boolean } = {}
+  ): Promise<DownloadPlan> {
+    return this.toDownloadPlan(await this.loadLiveManifest(query), options);
   }
 
   public async destroy(): Promise<void> {
@@ -295,21 +335,43 @@ export class ManifestService {
     );
   }
 
-  private toDownloadPlan(loaded: LoadedManifestSource): DownloadPlan {
+  private toDownloadPlan(
+    loaded: LoadedManifestSource,
+    options: { match?: string; prefixMatch?: boolean } = {}
+  ): DownloadPlan {
     const info = this.toManifestInfo(loaded);
     const files = this.toManifestFiles(loaded);
+    const filteredFiles = filterManifestFiles(
+      files,
+      options.match,
+      options.prefixMatch
+    );
+    const subsetSummary = summarizeManifestFileSubset(filteredFiles);
+    const isFiltered = Boolean(options.match);
 
     return {
       title: info.title,
       productId: info.productId,
       selectedManifestHash: info.selectedManifestHash,
       status: info.status,
-      installBytes: info.parsedManifest?.installBytes,
-      downloadBytes: info.parsedManifest?.downloadBytes,
-      chunkCount: info.parsedManifest?.chunkCount,
-      fileCount: info.parsedManifest?.fileCount,
-      largestFiles: files.slice(0, 10),
-      notes: info.notes
+      installBytes: isFiltered
+        ? subsetSummary.installBytes
+        : info.parsedManifest?.installBytes,
+      downloadBytes: isFiltered
+        ? subsetSummary.downloadBytes
+        : info.parsedManifest?.downloadBytes,
+      chunkCount: isFiltered ? undefined : info.parsedManifest?.chunkCount,
+      fileCount: isFiltered
+        ? subsetSummary.fileCount
+        : info.parsedManifest?.fileCount,
+      largestFiles: filteredFiles.slice(0, 10),
+      notes: isFiltered
+        ? [
+            ...info.notes,
+            `Download plan was filtered to manifest paths matching normalized ${options.prefixMatch ? 'prefix' : 'substring'} "${options.match}".`,
+            'Chunk count is omitted for filtered plans because the current manifest summary is file-based, not chunk-membership-based.'
+          ]
+        : info.notes
     };
   }
 

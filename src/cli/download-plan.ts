@@ -92,17 +92,36 @@ export function registerDownloadPlanCommand(
       '--live',
       'Use live Demux/download-service retrieval instead of the public fixture path'
     )
+    .option(
+      '--match <text>',
+      'Filter the plan to files whose manifest paths match a normalized substring or prefix'
+    )
+    .option(
+      '--prefix',
+      'Treat --match as a normalized manifest-path prefix instead of a substring'
+    )
     .action(
       async (
         titleOrId: string,
-        options: { json?: boolean; live?: boolean }
+        options: {
+          json?: boolean;
+          live?: boolean;
+          match?: string;
+          prefix?: boolean;
+        }
       ) => {
         const context = await makeContext();
         const manifestService = buildManifestService(context);
         try {
           const plan = options.live
-            ? await manifestService.getLiveDownloadPlan(titleOrId)
-            : await manifestService.getDownloadPlan(titleOrId);
+            ? await manifestService.getLiveDownloadPlan(titleOrId, {
+                match: options.match,
+                prefixMatch: options.prefix
+              })
+            : await manifestService.getDownloadPlan(titleOrId, {
+                match: options.match,
+                prefixMatch: options.prefix
+              });
 
           if (options.json) {
             process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
