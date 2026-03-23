@@ -8,6 +8,7 @@ import { registerConfigCommand } from './cli/config-show';
 import { createCliContext } from './cli/context';
 import { registerDoctorCommand } from './cli/doctor';
 import { registerDownloadPlanCommand } from './cli/download-plan';
+import { registerDownloadSlicesCommand } from './cli/download-slices';
 import { registerDownloadUrlsCommand } from './cli/download-urls';
 import { registerDemuxInfoCommand } from './cli/demux-info';
 import { registerDemuxListCommand } from './cli/demux-list';
@@ -16,6 +17,7 @@ import { registerInfoCommand } from './cli/info';
 import { registerListCommand } from './cli/list';
 import { registerManifestCommand } from './cli/manifest';
 import { registerSearchCommand } from './cli/search';
+import { registerSliceUrlsCommand } from './cli/slice-urls';
 import { UserFacingError } from './util/errors';
 
 async function main(): Promise<void> {
@@ -41,6 +43,8 @@ async function main(): Promise<void> {
   registerFilesCommand(program, makeContext);
   registerDownloadPlanCommand(program, makeContext);
   registerDownloadUrlsCommand(program, makeContext);
+  registerSliceUrlsCommand(program, makeContext);
+  registerDownloadSlicesCommand(program, makeContext);
   registerAddonsCommand(program, makeContext);
   registerDoctorCommand(program, makeContext);
   registerConfigCommand(program, makeContext);

@@ -41,6 +41,36 @@ export interface DemuxDownloadUrlsInfo {
   notes: string[];
 }
 
+export interface DemuxSliceUrlsInfo {
+  title: string;
+  demuxProductId: number;
+  publicProductId?: number;
+  manifestHash: string;
+  totalUniqueSliceCount: number;
+  requestedSliceCount: number;
+  ownershipTokenExpiresAt?: string;
+  urls: DemuxDownloadUrl[];
+  notes: string[];
+}
+
+export interface DemuxSliceDownload {
+  relativePath: string;
+  filePath: string;
+  bytes: number;
+  url: string;
+}
+
+export interface DemuxSliceDownloadResult {
+  title: string;
+  demuxProductId: number;
+  publicProductId?: number;
+  manifestHash: string;
+  outputDir: string;
+  downloadedCount: number;
+  files: DemuxSliceDownload[];
+  notes: string[];
+}
+
 export interface LiveManifestDownload {
   game: DemuxOwnedGame;
   manifestHash: string;

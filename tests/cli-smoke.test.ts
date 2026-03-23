@@ -37,5 +37,7 @@ describe('cli smoke test', () => {
     expect(stdout).toContain('demux-list');
     expect(stdout).toContain('demux-info');
     expect(stdout).toContain('download-urls');
+    expect(stdout).toContain('slice-urls');
+    expect(stdout).toContain('download-slices');
   }, 120_000);
 });

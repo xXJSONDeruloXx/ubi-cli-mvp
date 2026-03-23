@@ -117,12 +117,15 @@ export interface DemuxDownloadUrlResult {
   urls: string[];
 }
 
-export interface ManifestAssetUrlResult {
+export interface DownloadUrlResult {
+  ownershipTokenExpiresAt?: string;
+  responses: DemuxDownloadUrlResult[];
+}
+
+export interface ManifestAssetUrlResult extends DownloadUrlResult {
   manifestUrl?: string;
   metadataUrl?: string;
   licensesUrl?: string;
-  ownershipTokenExpiresAt?: string;
-  responses: DemuxDownloadUrlResult[];
 }
 
 export interface DemuxClientOptions {
@@ -231,81 +234,101 @@ export class DemuxClient {
     });
   }
 
+  public async getDownloadUrlsForRelativePaths(
+    session: StoredSession,
+    productId: number,
+    relativePaths: string[]
+  ): Promise<DownloadUrlResult> {
+    return this.withRetry(
+      `getDownloadUrlsForRelativePaths:${productId}`,
+      async () => {
+        const token = await this.getOwnershipToken(session, productId);
+        if (!token.token) {
+          throw new Error(
+            `Demux did not return an ownership token for product ${productId}.`
+          );
+        }
+
+        const demux = await this.getAuthenticatedDemux(session);
+        const downloadConnection =
+          await demux.openConnection('download_service');
+        const initializeResponse = (await downloadConnection.request({
+          request: {
+            requestId: 1,
+            initializeReq: {
+              ownershipToken: token.token,
+              networkId: ''
+            }
+          }
+        })) as DemuxDownloadInitializeResponse;
+
+        if (!initializeResponse.response?.initializeRsp?.ok) {
+          throw new Error(
+            `Demux download service initialization failed for product ${productId}.`
+          );
+        }
+
+        const urlResponse = (await downloadConnection.request({
+          request: {
+            requestId: 1,
+            urlReq: {
+              urlRequests: [
+                {
+                  productId,
+                  relativeFilePath: relativePaths
+                }
+              ]
+            }
+          }
+        })) as DemuxDownloadUrlResponse;
+
+        return {
+          ownershipTokenExpiresAt: token.expiration,
+          responses:
+            urlResponse.response?.urlRsp?.urlResponses?.map(
+              (response, index) => ({
+                result: response.result ?? -1,
+                relativePath:
+                  response.relativeFilePath ?? relativePaths[index] ?? '',
+                urls:
+                  response.downloadUrls?.flatMap(
+                    (downloadUrl) => downloadUrl.urls ?? []
+                  ) ?? []
+              })
+            ) ?? []
+        };
+      }
+    );
+  }
+
   public async getManifestAssetUrls(
     session: StoredSession,
     productId: number,
     manifestHash: string
   ): Promise<ManifestAssetUrlResult> {
-    return this.withRetry(`getManifestAssetUrls:${productId}`, async () => {
-      const relativePaths = [
+    const result = await this.getDownloadUrlsForRelativePaths(
+      session,
+      productId,
+      [
         `manifests/${manifestHash}.manifest`,
         `manifests/${manifestHash}.metadata`,
         `manifests/${manifestHash}.licenses`
-      ];
+      ]
+    );
 
-      const token = await this.getOwnershipToken(session, productId);
-      if (!token.token) {
-        throw new Error(
-          `Demux did not return an ownership token for product ${productId}.`
-        );
-      }
-
-      const demux = await this.getAuthenticatedDemux(session);
-      const downloadConnection = await demux.openConnection('download_service');
-      const initializeResponse = (await downloadConnection.request({
-        request: {
-          requestId: 1,
-          initializeReq: {
-            ownershipToken: token.token,
-            networkId: ''
-          }
-        }
-      })) as DemuxDownloadInitializeResponse;
-
-      if (!initializeResponse.response?.initializeRsp?.ok) {
-        throw new Error(
-          `Demux download service initialization failed for product ${productId}.`
-        );
-      }
-
-      const urlResponse = (await downloadConnection.request({
-        request: {
-          requestId: 1,
-          urlReq: {
-            urlRequests: [
-              {
-                productId,
-                relativeFilePath: relativePaths
-              }
-            ]
-          }
-        }
-      })) as DemuxDownloadUrlResponse;
-
-      const responses =
-        urlResponse.response?.urlRsp?.urlResponses?.map((response, index) => ({
-          result: response.result ?? -1,
-          relativePath: response.relativeFilePath ?? relativePaths[index] ?? '',
-          urls:
-            response.downloadUrls?.flatMap(
-              (downloadUrl) => downloadUrl.urls ?? []
-            ) ?? []
-        })) ?? [];
-
-      return {
-        manifestUrl: responses.find((entry) =>
-          entry.relativePath.endsWith('.manifest')
-        )?.urls[0],
-        metadataUrl: responses.find((entry) =>
-          entry.relativePath.endsWith('.metadata')
-        )?.urls[0],
-        licensesUrl: responses.find((entry) =>
-          entry.relativePath.endsWith('.licenses')
-        )?.urls[0],
-        ownershipTokenExpiresAt: token.expiration,
-        responses
-      };
-    });
+    return {
+      manifestUrl: result.responses.find((entry) =>
+        entry.relativePath.endsWith('.manifest')
+      )?.urls[0],
+      metadataUrl: result.responses.find((entry) =>
+        entry.relativePath.endsWith('.metadata')
+      )?.urls[0],
+      licensesUrl: result.responses.find((entry) =>
+        entry.relativePath.endsWith('.licenses')
+      )?.urls[0],
+      ownershipTokenExpiresAt: result.ownershipTokenExpiresAt,
+      responses: result.responses
+    };
   }
 
   public async destroy(): Promise<void> {

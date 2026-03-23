@@ -118,4 +118,163 @@ describe('demux service', () => {
     const item = await service.resolveOwnedGame('569');
     expect(item.demuxProductId).toBe(2916);
   });
+
+  it('derives slice URLs from a parsed live manifest', async () => {
+    const service = new DemuxService(
+      {
+        debugDir: '/tmp',
+        sessionFile: '/tmp/session.json'
+      } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined }),
+        debug: () => undefined
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'ticket',
+            sessionId: 'session',
+            userId: 'user'
+          })
+      } as never,
+      {
+        getDownloadUrlsForRelativePaths: (
+          _session: unknown,
+          _productId: number,
+          relativePaths: string[]
+        ) =>
+          Promise.resolve({
+            ownershipTokenExpiresAt: '1774300461',
+            responses: relativePaths.map((relativePath) => ({
+              result: 0,
+              relativePath,
+              urls: [`https://example.test/${relativePath}`]
+            }))
+          })
+      } as never,
+      {
+        requestRaw: () =>
+          Promise.resolve({ status: 200, body: Buffer.from('') })
+      } as never
+    );
+
+    Object.assign(service as object, {
+      parseLiveManifest: () =>
+        Promise.resolve({
+          download: {
+            game: {
+              title: 'Far Cry® 3',
+              demuxProductId: 46,
+              publicProductId: 46
+            },
+            manifestHash: 'LIVEHASH'
+          },
+          parsed: {
+            chunks: [
+              {
+                files: [
+                  { slices: ['jl9njs27p+9ZSDuruaYoIZbIqQ4='] },
+                  { slices: ['KhBXSTHzAbUERoR18i0BDugDRNQ='] }
+                ]
+              }
+            ]
+          }
+        })
+    });
+
+    const info = await service.getSliceUrls('46', 2);
+
+    expect(info).toMatchObject({
+      title: 'Far Cry® 3',
+      demuxProductId: 46,
+      publicProductId: 46,
+      manifestHash: 'LIVEHASH',
+      totalUniqueSliceCount: 2,
+      requestedSliceCount: 2,
+      ownershipTokenExpiresAt: '1774300461'
+    });
+    expect(info.urls[0]?.relativePath).toBe(
+      'slices_v3/e/8E5F678ECDBBA7EF59483BABB9A6282196C8A90E'
+    );
+  });
+
+  it('downloads raw slice payloads to disk without reconstructing game files', async () => {
+    const service = new DemuxService(
+      {
+        debugDir: '/tmp',
+        sessionFile: '/tmp/session.json'
+      } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined }),
+        debug: () => undefined
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'ticket',
+            sessionId: 'session',
+            userId: 'user'
+          })
+      } as never,
+      {} as never,
+      {
+        requestRaw: (url: string) =>
+          Promise.resolve(
+            url.endsWith('/primary')
+              ? { status: 404, body: Buffer.from('') }
+              : { status: 200, body: Buffer.from('slice-bytes') }
+          )
+      } as never
+    );
+
+    Object.assign(service as object, {
+      getSliceUrls: () =>
+        Promise.resolve({
+          title: 'Far Cry® 3',
+          demuxProductId: 46,
+          publicProductId: 46,
+          manifestHash: 'LIVEHASH',
+          totalUniqueSliceCount: 1,
+          requestedSliceCount: 1,
+          urls: [
+            {
+              relativePath:
+                'slices_v3/e/8E5F678ECDBBA7EF59483BABB9A6282196C8A90E',
+              result: 0,
+              urls: [
+                'https://example.test/primary',
+                'https://example.test/fallback'
+              ]
+            }
+          ],
+          notes: []
+        })
+    });
+
+    const result = await service.downloadSlices('46', 1, '/tmp/ubi-slice-test');
+
+    expect(result).toMatchObject({
+      title: 'Far Cry® 3',
+      demuxProductId: 46,
+      publicProductId: 46,
+      manifestHash: 'LIVEHASH',
+      outputDir: '/tmp/ubi-slice-test',
+      downloadedCount: 1
+    });
+    expect(result.files[0]?.bytes).toBe(11);
+  });
 });

@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
 import { AuthService } from '../core/auth-service';
@@ -9,10 +9,13 @@ import type { AppPaths, RuntimeConfig } from '../models/config';
 import type {
   DemuxDownloadUrlsInfo,
   DemuxOwnedGame,
+  DemuxSliceDownloadResult,
+  DemuxSliceUrlsInfo,
   LiveManifestDownload
 } from '../models/demux';
 import type { ProductConfigSummary } from '../models/product';
 import { UserFacingError } from '../util/errors';
+import { collectUniqueSlicePaths } from '../util/demux-slices';
 import { normalizeForMatch, scoreTitleMatch } from '../util/matching';
 import type { Logger } from '../util/logger';
 import type { ProductService } from './product-service';
@@ -174,6 +177,102 @@ export class DemuxService {
       urls: result.responses,
       notes: [
         'Signed URLs came from the live Demux download service using an ownership token for this entitled product.'
+      ]
+    };
+  }
+
+  public async getSliceUrls(
+    query: string,
+    limit = 20
+  ): Promise<DemuxSliceUrlsInfo> {
+    const { download, parsed } = await this.parseLiveManifest(query);
+    const allSlicePaths = collectUniqueSlicePaths(
+      parsed as Parameters<typeof collectUniqueSlicePaths>[0]
+    );
+    const requestedPaths = allSlicePaths.slice(0, limit);
+    const session = await this.authService.ensureValidSession();
+    const result = await this.demuxClient.getDownloadUrlsForRelativePaths(
+      session,
+      download.game.demuxProductId,
+      requestedPaths
+    );
+
+    return {
+      title: download.game.title,
+      demuxProductId: download.game.demuxProductId,
+      publicProductId: download.game.publicProductId,
+      manifestHash: download.manifestHash,
+      totalUniqueSliceCount: allSlicePaths.length,
+      requestedSliceCount: requestedPaths.length,
+      ownershipTokenExpiresAt: result.ownershipTokenExpiresAt,
+      urls: result.responses,
+      notes: [
+        'Slice URLs were derived from the parsed live manifest and requested from the Demux download service.'
+      ]
+    };
+  }
+
+  public async downloadSlices(
+    query: string,
+    limit = 5,
+    outputDir?: string
+  ): Promise<DemuxSliceDownloadResult> {
+    const sliceUrls = await this.getSliceUrls(query, limit);
+    const resolvedOutputDir =
+      outputDir ??
+      path.join(
+        this.paths.debugDir,
+        'demux-slices',
+        `${sliceUrls.demuxProductId}_${sliceUrls.manifestHash}`
+      );
+    await mkdir(resolvedOutputDir, { recursive: true });
+
+    const files = [] as DemuxSliceDownloadResult['files'];
+    for (const entry of sliceUrls.urls) {
+      let successfulUrl: string | undefined;
+      let body: Buffer | undefined;
+      let lastStatus: number | undefined;
+
+      for (const url of entry.urls) {
+        const response = await this.httpClient.requestRaw(url, {
+          retryCount: 0,
+          timeoutMs: 60000
+        });
+        lastStatus = response.status;
+        if (response.status === 200) {
+          successfulUrl = url;
+          body = Buffer.from(response.body);
+          break;
+        }
+      }
+
+      if (!successfulUrl || !body) {
+        throw new Error(
+          `Fetching slice ${entry.relativePath} failed for all candidate URLs${lastStatus !== undefined ? ` (last HTTP ${lastStatus})` : ''}.`
+        );
+      }
+
+      const fileName = entry.relativePath.split('/').at(-1) ?? 'slice.bin';
+      const filePath = path.join(resolvedOutputDir, `${fileName}.slice`);
+      await writeFile(filePath, body);
+      files.push({
+        relativePath: entry.relativePath,
+        filePath,
+        bytes: body.length,
+        url: successfulUrl
+      });
+    }
+
+    return {
+      title: sliceUrls.title,
+      demuxProductId: sliceUrls.demuxProductId,
+      publicProductId: sliceUrls.publicProductId,
+      manifestHash: sliceUrls.manifestHash,
+      outputDir: resolvedOutputDir,
+      downloadedCount: files.length,
+      files,
+      notes: [
+        'This command downloads raw slice payloads only. It does not reconstruct final installed game files yet.'
       ]
     };
   }
