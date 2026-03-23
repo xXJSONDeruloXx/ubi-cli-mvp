@@ -45,7 +45,7 @@ export class ProductService {
   ) {}
 
   public async resolveProduct(query: string): Promise<ResolvedProduct> {
-    const library = await this.libraryService.listOwnedGames();
+    const library = await this.libraryService.listOwnedGames({ dedupe: true });
 
     if (isLikelyNumericId(query)) {
       const productId = Number.parseInt(query, 10);
@@ -107,9 +107,45 @@ export class ProductService {
 
     const libraryItem = scoredLibraryMatches[0]?.item;
     if (!libraryItem) {
-      throw new UserFacingError(
-        `No owned Ubisoft title matched "${query}". Try a product ID or exact title from \`ubi list\`.`
+      const publicMatch =
+        await this.publicCatalog.findUniqueCatalogProductByTitle(query);
+      if (!publicMatch) {
+        throw new UserFacingError(
+          `No Ubisoft title matched "${query}". Try a product ID, an owned title from \`ubi list\`, or use \`ubi search ${query}\` to inspect ambiguous public catalog matches.`
+        );
+      }
+
+      const productConfigEntry = await this.publicCatalog.findConfigByProductId(
+        publicMatch.productId
       );
+      const manifestHashes = await this.publicCatalog.findManifestsByProductId(
+        publicMatch.productId
+      );
+      const configSummary = this.getConfigSummary(
+        productConfigEntry?.Configuration
+      );
+
+      return {
+        info: {
+          query,
+          title:
+            publicMatch.title ??
+            configSummary?.rootName ??
+            `Product ${publicMatch.productId}`,
+          productId: publicMatch.productId,
+          spaceId: publicMatch.spaceId,
+          appId: publicMatch.appId,
+          productType: publicMatch.productType,
+          manifestHashes,
+          configSummary,
+          hasRawConfiguration: Boolean(productConfigEntry?.Configuration),
+          sources: {
+            library: false,
+            publicCatalog: true
+          }
+        },
+        productConfigEntry
+      };
     }
 
     const productServiceEntry =

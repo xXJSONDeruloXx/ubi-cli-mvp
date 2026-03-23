@@ -1,3 +1,11 @@
+export interface ManifestFileEntry {
+  path: string;
+  installBytes: string;
+  downloadBytes: string;
+  sliceCount: number;
+  isDirectory: boolean;
+}
+
 export interface ParsedManifestSummary {
   manifestHash: string;
   version?: number;
@@ -7,6 +15,8 @@ export interface ParsedManifestSummary {
   languageCodes: string[];
   chunkCount: number;
   fileCount: number;
+  installBytes?: string;
+  downloadBytes?: string;
 }
 
 export interface ManifestInfo {
@@ -17,5 +27,18 @@ export interface ManifestInfo {
   parsedManifest?: ParsedManifestSummary;
   rawFixtureUrl?: string;
   status: 'parsed-public-fixture' | 'hashes-only' | 'blocked';
+  notes: string[];
+}
+
+export interface DownloadPlan {
+  title: string;
+  productId?: number;
+  selectedManifestHash?: string;
+  status: ManifestInfo['status'];
+  installBytes?: string;
+  downloadBytes?: string;
+  chunkCount?: number;
+  fileCount?: number;
+  largestFiles: ManifestFileEntry[];
   notes: string[];
 }

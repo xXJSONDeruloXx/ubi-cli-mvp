@@ -2,13 +2,17 @@
 import 'dotenv/config';
 import process from 'node:process';
 import { Command } from 'commander';
+import { registerAddonsCommand } from './cli/addons';
 import { registerAuthCommands } from './cli/auth';
 import { registerConfigCommand } from './cli/config-show';
 import { createCliContext } from './cli/context';
 import { registerDoctorCommand } from './cli/doctor';
+import { registerDownloadPlanCommand } from './cli/download-plan';
+import { registerFilesCommand } from './cli/files';
 import { registerInfoCommand } from './cli/info';
 import { registerListCommand } from './cli/list';
 import { registerManifestCommand } from './cli/manifest';
+import { registerSearchCommand } from './cli/search';
 import { UserFacingError } from './util/errors';
 
 async function main(): Promise<void> {
@@ -26,8 +30,12 @@ async function main(): Promise<void> {
 
   registerAuthCommands(program, makeContext);
   registerListCommand(program, makeContext);
+  registerSearchCommand(program, makeContext);
   registerInfoCommand(program, makeContext);
   registerManifestCommand(program, makeContext);
+  registerFilesCommand(program, makeContext);
+  registerDownloadPlanCommand(program, makeContext);
+  registerAddonsCommand(program, makeContext);
   registerDoctorCommand(program, makeContext);
   registerConfigCommand(program, makeContext);
 

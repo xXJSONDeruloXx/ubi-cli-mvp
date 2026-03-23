@@ -1,0 +1,38 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { loadUbisoftDemuxModule } from '../src/core/ubisoft-demux-loader';
+import {
+  summarizeParsedManifest,
+  toManifestFiles
+} from '../src/services/manifest-service';
+
+describe('manifest summary helpers', () => {
+  it('summarizes install/download sizes and largest files from the public fixture', async () => {
+    const fixture = await readFile(
+      path.join(
+        process.cwd(),
+        'tests/fixtures/manifests/46_0C3D19B8681787293905C848F20553A0D21133C6.manifest'
+      )
+    );
+    const { UbisoftFileParser } = await loadUbisoftDemuxModule();
+    const parser = new UbisoftFileParser();
+    const parsed = parser.parseDownloadManifest(fixture);
+
+    const summary = summarizeParsedManifest(
+      parsed,
+      '0C3D19B8681787293905C848F20553A0D21133C6'
+    );
+    const files = toManifestFiles(parsed);
+
+    expect(summary.installBytes).toBe('11628461616');
+    expect(summary.downloadBytes).toBe('10084216628');
+    expect(files[0]).toMatchObject({
+      path: 'data_win32/worlds/fc3_main/fc3_main.dat',
+      installBytes: '3496061837',
+      downloadBytes: '3149129292',
+      sliceCount: 3335,
+      isDirectory: false
+    });
+  });
+});

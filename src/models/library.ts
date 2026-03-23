@@ -9,4 +9,6 @@ export interface LibraryItem {
   bannerUrl?: string;
   releaseDate?: string;
   source: 'graphql';
+  variantCount?: number;
+  variantSpaceIds?: string[];
 }

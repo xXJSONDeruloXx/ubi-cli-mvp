@@ -2,29 +2,29 @@ import process from 'node:process';
 import type { Command } from 'commander';
 import { AuthService } from '../core/auth-service';
 import { HttpClient } from '../core/http';
-import type { ManifestInfo } from '../models/manifest';
+import type { DownloadPlan } from '../models/manifest';
 import { LibraryService } from '../services/library-service';
 import { ManifestService } from '../services/manifest-service';
 import { ProductService } from '../services/product-service';
 import { PublicCatalogService } from '../services/public-catalog-service';
 import type { CliContext } from './context';
 
-function renderHuman(info: ManifestInfo): string {
+function renderHuman(plan: DownloadPlan): string {
   return [
-    `title: ${info.title}`,
-    `productId: ${info.productId ?? 'unknown'}`,
-    `status: ${info.status}`,
-    `manifestHashes: ${info.manifestHashes.length > 0 ? info.manifestHashes.join(', ') : '(none)'}`,
-    `selectedManifestHash: ${info.selectedManifestHash ?? '(none)'}`,
-    `parsed.version: ${info.parsedManifest?.version ?? '(unknown)'}`,
-    `parsed.compressionMethod: ${info.parsedManifest?.compressionMethod ?? '(unknown)'}`,
-    `parsed.chunkCount: ${info.parsedManifest?.chunkCount ?? '(unknown)'}`,
-    `parsed.fileCount: ${info.parsedManifest?.fileCount ?? '(unknown)'}`,
-    `parsed.installBytes: ${info.parsedManifest?.installBytes ?? '(unknown)'}`,
-    `parsed.downloadBytes: ${info.parsedManifest?.downloadBytes ?? '(unknown)'}`,
-    `parsed.languages: ${info.parsedManifest?.languageCodes.join(', ') ?? '(unknown)'}`,
-    `rawFixtureUrl: ${info.rawFixtureUrl ?? '(none)'}`,
-    `notes: ${info.notes.join(' | ')}`
+    `title: ${plan.title}`,
+    `productId: ${plan.productId ?? 'unknown'}`,
+    `status: ${plan.status}`,
+    `manifest: ${plan.selectedManifestHash ?? '(none)'}`,
+    `installBytes: ${plan.installBytes ?? '(unknown)'}`,
+    `downloadBytes: ${plan.downloadBytes ?? '(unknown)'}`,
+    `chunkCount: ${plan.chunkCount ?? '(unknown)'}`,
+    `fileCount: ${plan.fileCount ?? '(unknown)'}`,
+    `largestFiles:`,
+    ...plan.largestFiles.map(
+      (file) =>
+        `  - ${file.path} | install=${file.installBytes} | download=${file.downloadBytes} | slices=${file.sliceCount}`
+    ),
+    `notes: ${plan.notes.join(' | ')}`
   ].join('\n');
 }
 
@@ -65,26 +65,26 @@ function buildManifestService(context: CliContext): ManifestService {
   );
 }
 
-export function registerManifestCommand(
+export function registerDownloadPlanCommand(
   program: Command,
   makeContext: () => Promise<CliContext>
 ): void {
   program
-    .command('manifest <titleOrId>')
+    .command('download-plan <titleOrId>')
     .description(
-      'Show manifest/build information for a Ubisoft title or product ID'
+      'Show an experimental dry-run download/install plan from a parsed public manifest fixture'
     )
     .option('--json', 'Output JSON')
     .action(async (titleOrId: string, options: { json?: boolean }) => {
       const context = await makeContext();
       const manifestService = buildManifestService(context);
-      const info = await manifestService.getManifestInfo(titleOrId);
+      const plan = await manifestService.getDownloadPlan(titleOrId);
 
       if (options.json) {
-        process.stdout.write(`${JSON.stringify(info, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
         return;
       }
 
-      process.stdout.write(`${renderHuman(info)}\n`);
+      process.stdout.write(`${renderHuman(plan)}\n`);
     });
 }

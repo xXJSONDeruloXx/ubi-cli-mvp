@@ -26,4 +26,13 @@ describe('cli smoke test', () => {
     expect(parsed.appName).toBe('ubi-cli-mvp');
     expect(parsed.nodeVersion.startsWith('v')).toBe(true);
   }, 120_000);
+
+  it('shows newly registered exploratory commands in help output', async () => {
+    const stdout = await run('node', ['dist/index.js', '--help']);
+
+    expect(stdout).toContain('addons');
+    expect(stdout).toContain('files');
+    expect(stdout).toContain('download-plan');
+    expect(stdout).toContain('search');
+  }, 120_000);
 });
