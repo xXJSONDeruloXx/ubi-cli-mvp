@@ -86,3 +86,4 @@ Exit criteria:
 - 2026-03-23: Added `download-game` as a first-pass full-tree reconstruction command for owned live manifests, plus zlib slice decompression support needed by older titles such as Splinter Cell.
 - 2026-03-24: Added signed-URL refresh on 403, skip-existing resume behavior, and parallel full-tree reconstruction workers; used those improvements to complete a full Splinter Cell manifest-tree download over multiple runs.
 - 2026-03-24: Added a pre-scan that skips slice URL resolution for already-complete files during full-tree resume runs, reducing repeated Splinter Cell validation to zero downloaded bytes on a complete rerun.
+- 2026-03-24: Reused a single Demux `download_service` connection across repeated URL lookups, added regression coverage for that behavior, and live-validated a full 5844-slice Splinter Cell URL-resolution run without the earlier listener warning.

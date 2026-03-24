@@ -150,6 +150,7 @@ Outcome:
 - `extract-files 3539 'Support\\Readme' --prefix --limit 3` reconstructed three live readme files into `/tmp/ubi-extract-batch-live`, validating batch extraction against the current owned build; batch slice reuse remains a tested implementation behavior and may or may not apply to a given live file set
 - `download-game 109 --output-dir /tmp/splinter-cell-download` started as a whole-tree Splinter Cell probe, exposed zlib-framed slice payloads on an older title plus the need for signed-URL refresh/resume orchestration, and after those fixes succeeded in reconstructing the full tree into `/tmp/splinter-cell-download`
 - a later rerun of that same command over the already-complete tree downloaded `0` bytes and skipped all `5320` files, confirming that whole-tree resume is now much more efficient for repeat validation
+- `slice-urls 109 --limit 5844` resolved every unique Splinter Cell slice URL with empty stderr after switching the client to reuse one `download_service` connection, which strongly suggests the earlier `MaxListenersExceededWarning` came from repeatedly opening download-service connections
 
 ### Demux validation commands
 
@@ -204,6 +205,12 @@ This repo currently demonstrates a **usable MVP** for:
 - live library listing via GraphQL with deduped summary output and search
 - source-backed product metadata lookup and public catalog disambiguation
 - public association-graph exploration for DLC-like products
+- reproducible manifest inspection, file listing, and dry-run download planning via public fixtures
+- validated and now exposed Demux transport/auth, ownership inspection, ownership-token retrieval, download-service URL retrieval, live `.manifest/.metadata/.licenses` parsing, slice-URL derivation, and raw-slice download flows for owned titles
+
+It does **not** yet implement chunk downloading/reconstruction or a full installer/update engine, but the remaining blocker is now post-manifest download orchestration rather than basic Demux connectivity.
+or DLC-like products
+
 - reproducible manifest inspection, file listing, and dry-run download planning via public fixtures
 - validated and now exposed Demux transport/auth, ownership inspection, ownership-token retrieval, download-service URL retrieval, live `.manifest/.metadata/.licenses` parsing, slice-URL derivation, and raw-slice download flows for owned titles
 

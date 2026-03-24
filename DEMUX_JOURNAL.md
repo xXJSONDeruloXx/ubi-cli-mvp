@@ -116,6 +116,10 @@ Completed after the breakthrough:
   - `bytesDownloaded: 0`
   - `skippedExistingFiles: 5320`
 - That means repeat whole-tree validation is now dramatically cheaper once the local output tree is already present.
+- The repeated Demux listener warning also appears to have a concrete cause and mitigation now:
+  - the upstream `ubisoft-demux` package adds a `connectionData` listener each time `openConnection(...)` is called
+  - `DemuxClient` now reuses a single `download_service` connection instead of opening a new one for every URL lookup
+  - live validation with `slice-urls 109 --limit 5844` completed with empty stderr, which strongly suggests the earlier `MaxListenersExceededWarning` came from repeated download-service connection creation
 - Whole-build reconstruction is still somewhat rough around the edges though: the repo can now reconstruct at least one full older game tree over multiple runs, but it still does not implement a hardened launcher-grade install/update engine.
 
 ### Current blocker frontier
