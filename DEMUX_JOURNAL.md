@@ -106,8 +106,14 @@ Completed after the breakthrough:
 - Live validation on Origins showed the same `extract-file 3539 'Support\\Readme\\English\\Readme.txt'` command dropping from `bytesDownloaded: 4532` on first run to `bytesDownloaded: 0` on second run, with transfer stats reporting `diskCacheHits=1`.
 - A later Splinter Cell full-tree reconstruction attempt surfaced two more important findings:
   - some older manifests use **zlib-framed** slice payloads rather than zstd; adding inflate support fixed at least one live Splinter Cell file that initially failed strict size validation
-  - a long-running `download-game 109` attempt later hit signed slice URL `403` failures, which is strong evidence that real full-game downloads need signed-URL refresh / resume orchestration instead of one long uninterrupted pass
-- Whole-build reconstruction is still unreliable though: this is now stronger evidence that some individual multi-slice files and small matching batches can be rebuilt correctly, and that repeated workflows can be made more downloader-like with local cache reuse, but the repo still does not implement full installer/update orchestration.
+  - a long-running `download-game 109` attempt later hit signed slice URL `403` failures, which showed that real full-game downloads need signed-URL refresh / resume orchestration instead of one long uninterrupted pass
+- After adding signed-URL refresh, skip-existing resume behavior, and longer slice fetch timeouts, a later resumed `download-game 109 --workers 4 --output-dir /tmp/splinter-cell-download` run completed the full manifest tree too:
+  - `matchedCount: 5320`
+  - `extractedCount: 5320`
+  - `sliceReferenceCount: 5880`
+  - `uniqueSliceCount: 5844`
+  - resumed run stats included `skippedExistingFiles: 5300` and `bytesDownloaded: 198679866`
+- Whole-build reconstruction is still somewhat rough around the edges though: the repo can now reconstruct at least one full older game tree over multiple runs, but it still does not implement a hardened launcher-grade install/update engine.
 
 ### Current blocker frontier
 

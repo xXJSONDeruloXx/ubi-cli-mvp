@@ -302,25 +302,10 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 1. `ubi list` still uses the live GraphQL library endpoint rather than replacing it wholesale with Demux ownership output.[6][9][19]
 2. Public-catalog product IDs do not always align 1:1 with Demux ownership product IDs, so cross-surface reconciliation still needs implementation work.[4][14][19]
 3. Live Demux manifest inspection now works for owned products that expose a useful `latestManifest`, but not every entitlement row exposes one.[4][19]
-4. The CLI can now parse live `.manifest`, `.metadata`, and `.licenses` assets, download raw slice blobs, persist raw slice cache entries, and experimentally reconstruct some individual files or small matching file batches from live slices, but it still does **not** reconstruct whole game installs.[3][5][19]
-5. Download-service asset and slice exposure still varies by title, entitlement row, and file path; the current implementation gracefully handles missing live `.metadata`/`.licenses` URLs, and `extract-file` / `extract-files` remain experimental rather than universally reliable for every manifest path or title.[4][5][19]
-6. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
-
-## Roadmap
-
-See `docs/roadmap.md` for milestone tracking and the progress log.
-
-## References
-
-All numbered citations resolve in `docs/references.md`.
-erences
-
-All numbered citations resolve in `docs/references.md`.
-
-# References
-
-All numbered citations resolve in `docs/references.md`.
-imental rather than universally reliable for every manifest path or title.[4][5][19] 6. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
+4. The CLI can now parse live `.manifest`, `.metadata`, and `.licenses` assets, download raw slice blobs, persist raw slice cache entries, and experimentally reconstruct some individual files, small matching file batches, or even a full game tree over multiple runs, but it still does **not** provide a launcher-grade install/update engine.[3][5][19]
+5. Download-service asset and slice exposure still varies by title, entitlement row, compression format, and file path; the current implementation gracefully handles missing live `.metadata`/`.licenses` URLs, but `extract-file`, `extract-files`, and `download-game` remain experimental rather than universally reliable for every manifest path or title.[4][5][19]
+6. Long-running full-game runs can still surface operational rough edges such as signed-URL refresh churn and underlying Demux listener/warning behavior; the current implementation is much more capable than before, but still needs more hardening for large unattended installs.[19]
+7. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
 
 ## Roadmap
 
