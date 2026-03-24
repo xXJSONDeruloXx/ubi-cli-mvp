@@ -626,17 +626,6 @@ export class DemuxService {
       );
     }
 
-    const sliceReferenceCount = selectedFiles.reduce(
-      (sum, file) => sum + (file.sliceList?.length ?? 0),
-      0
-    );
-    const uniqueSliceHashes = this.collectSliceHexHashesForFiles(selectedFiles);
-    const session = await this.authService.ensureValidSession();
-    const { responsesByHash } = await this.resolveSliceUrlResponses(
-      session,
-      prepared.download.game.demuxProductId,
-      uniqueSliceHashes
-    );
     const resolvedOutputDir =
       options.outputDir ??
       path.join(
@@ -644,33 +633,67 @@ export class DemuxService {
         'demux-game',
         `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`
       );
-    const cache = this.createExtractionCache(selectedFiles);
+    const workerCount = Math.max(1, options.workerCount ?? 4);
+    const filePlans = await mapLimit(
+      selectedFiles,
+      workerCount,
+      async (file) => {
+        const resolvedOutputPath = path.join(
+          resolvedOutputDir,
+          (file.name ?? '(unknown)').replaceAll('\\', path.sep)
+        );
+        const skipExisting = file.name
+          ? await this.isExistingExtractionComplete(file, resolvedOutputPath)
+          : false;
+        return {
+          file,
+          outputPath: resolvedOutputPath,
+          skipExisting
+        };
+      }
+    );
+    const pendingPlans = filePlans.filter((plan) => !plan.skipExisting);
+    const skippedPlans = filePlans.filter((plan) => plan.skipExisting);
+
+    const sliceReferenceCount = pendingPlans.reduce(
+      (sum, plan) => sum + (plan.file.sliceList?.length ?? 0),
+      0
+    );
+    const uniqueSliceHashes = this.collectSliceHexHashesForFiles(
+      pendingPlans.map((plan) => plan.file)
+    );
+    const session = await this.authService.ensureValidSession();
+    const { responsesByHash } = await this.resolveSliceUrlResponses(
+      session,
+      prepared.download.game.demuxProductId,
+      uniqueSliceHashes
+    );
+    const cache = this.createExtractionCache(
+      pendingPlans.map((plan) => plan.file)
+    );
+    cache.skippedExistingFileCount = skippedPlans.length;
     cache.refreshSliceEntry = this.buildRefreshSliceEntryCallback(
       prepared.download.game.demuxProductId,
       responsesByHash
     );
 
     const extractedEntries = await mapLimit(
-      selectedFiles,
-      Math.max(1, options.workerCount ?? 4),
-      async (file) => {
-        if (!file.name) {
+      pendingPlans,
+      workerCount,
+      async (plan) => {
+        if (!plan.file.name) {
           return undefined;
         }
 
-        const resolvedOutputPath = path.join(
-          resolvedOutputDir,
-          file.name.replaceAll('\\', path.sep)
-        );
         const extracted = await this.extractManifestFileToPath(
-          file,
-          resolvedOutputPath,
+          plan.file,
+          plan.outputPath,
           responsesByHash,
           cache
         );
         return {
-          manifestPath: file.name,
-          outputPath: resolvedOutputPath,
+          manifestPath: plan.file.name,
+          outputPath: plan.outputPath,
           sliceCount: extracted.sliceCount,
           bytesWritten: extracted.bytesWritten,
           bytesDownloaded: extracted.bytesDownloaded
@@ -678,14 +701,30 @@ export class DemuxService {
       }
     );
 
-    const files = extractedEntries.filter(
+    const downloadedFiles = extractedEntries.filter(
       (
         value
       ): value is DemuxExtractedFilesResult['files'][number] & {
         bytesDownloaded: number;
       } => Boolean(value)
     );
-    const bytesDownloaded = files.reduce(
+    const files = [
+      ...skippedPlans
+        .filter((plan) => Boolean(plan.file.name))
+        .map((plan) => ({
+          manifestPath: plan.file.name as string,
+          outputPath: plan.outputPath,
+          sliceCount: plan.file.sliceList?.length ?? 0,
+          bytesWritten: toNumber(plan.file.size)
+        })),
+      ...downloadedFiles.map((file) => ({
+        manifestPath: file.manifestPath,
+        outputPath: file.outputPath,
+        sliceCount: file.sliceCount,
+        bytesWritten: file.bytesWritten
+      }))
+    ].sort((a, b) => a.manifestPath.localeCompare(b.manifestPath));
+    const bytesDownloaded = downloadedFiles.reduce(
       (sum, file) => sum + file.bytesDownloaded,
       0
     );
@@ -1069,34 +1108,37 @@ export class DemuxService {
     }
   }
 
+  private async isExistingExtractionComplete(
+    file: ParsedManifestFileEntry,
+    outputPath: string
+  ): Promise<boolean> {
+    try {
+      const existing = await stat(outputPath);
+      return existing.isFile() && existing.size === toNumber(file.size);
+    } catch {
+      return false;
+    }
+  }
+
   private async shouldSkipExistingExtraction(
     file: ParsedManifestFileEntry,
     outputPath: string,
     cache: ExtractionCache
   ): Promise<boolean> {
-    try {
-      const existing = await stat(outputPath);
-      if (!existing.isFile()) {
-        return false;
-      }
-
-      if (existing.size !== toNumber(file.size)) {
-        return false;
-      }
-
-      cache.skippedExistingFileCount += 1;
-      for (const slice of file.sliceList ?? []) {
-        if (!slice.downloadSha1) {
-          continue;
-        }
-
-        this.releaseSliceReference(sliceTokenToHex(slice.downloadSha1), cache);
-      }
-
-      return true;
-    } catch {
+    if (!(await this.isExistingExtractionComplete(file, outputPath))) {
       return false;
     }
+
+    cache.skippedExistingFileCount += 1;
+    for (const slice of file.sliceList ?? []) {
+      if (!slice.downloadSha1) {
+        continue;
+      }
+
+      this.releaseSliceReference(sliceTokenToHex(slice.downloadSha1), cache);
+    }
+
+    return true;
   }
 
   private releaseSliceReference(
