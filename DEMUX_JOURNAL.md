@@ -104,6 +104,9 @@ Completed after the breakthrough:
 - That specific live sample did not demonstrate cross-file slice reuse, but the batch path itself now works live and reuse is covered by unit tests.
 - The repo now also persists downloaded raw slice payloads under the local cache directory and reuses them across later extraction/download commands when the same slice hash is requested again.
 - Live validation on Origins showed the same `extract-file 3539 'Support\\Readme\\English\\Readme.txt'` command dropping from `bytesDownloaded: 4532` on first run to `bytesDownloaded: 0` on second run, with transfer stats reporting `diskCacheHits=1`.
+- A later Splinter Cell full-tree reconstruction attempt surfaced two more important findings:
+  - some older manifests use **zlib-framed** slice payloads rather than zstd; adding inflate support fixed at least one live Splinter Cell file that initially failed strict size validation
+  - a long-running `download-game 109` attempt later hit signed slice URL `403` failures, which is strong evidence that real full-game downloads need signed-URL refresh / resume orchestration instead of one long uninterrupted pass
 - Whole-build reconstruction is still unreliable though: this is now stronger evidence that some individual multi-slice files and small matching batches can be rebuilt correctly, and that repeated workflows can be made more downloader-like with local cache reuse, but the repo still does not implement full installer/update orchestration.
 
 ### Current blocker frontier

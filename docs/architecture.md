@@ -154,8 +154,17 @@ Current modules include:
 2. Resolve one exact manifest file path from the parsed file table.
 3. Request signed URLs for just that file's needed slices.
 4. Reuse cached raw slices when available; otherwise fetch them and add them to the local cache.
-5. Decompress known zstd-framed slice payloads and write them at the manifest-declared offsets, with a sequential-offset fallback for all-zero protobuf-default offset lists.
+5. Decompress known zstd-framed or zlib-framed slice payloads and write them at the manifest-declared offsets, with a sequential-offset fallback for all-zero protobuf-default offset lists.
 6. Produce one experimental reconstructed file on disk without claiming full installer/update-engine support.
+
+### `ubi download-game <query>`
+
+1. Parse the live owned manifest.
+2. Select the full manifest file set.
+3. Resolve signed URLs for all referenced slices.
+4. Reuse cached raw slices when available; otherwise fetch them and add them to the local cache.
+5. Reconstruct the full manifest tree into a local output directory.
+6. Stop short of claiming full installer/update-engine support, because long runs may still need signed-URL refresh/retry orchestration.
 
 ### Public/fallback manifest path
 
