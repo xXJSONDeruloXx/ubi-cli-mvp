@@ -41,5 +41,6 @@ describe('cli smoke test', () => {
     expect(stdout).toContain('download-slices');
     expect(stdout).toContain('extract-file');
     expect(stdout).toContain('extract-files');
+    expect(stdout).toContain('download-game');
   }, 120_000);
 });

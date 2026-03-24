@@ -28,7 +28,13 @@ function renderHuman(info: DemuxExtractedFileResult): string {
   ].join('\n');
 }
 
-function renderBatchHuman(info: DemuxExtractedFilesResult): string {
+function renderBatchHuman(
+  info: DemuxExtractedFilesResult,
+  maxFiles = Number.POSITIVE_INFINITY
+): string {
+  const visibleFiles = info.files.slice(0, maxFiles);
+  const omittedCount = info.files.length - visibleFiles.length;
+
   return [
     `title: ${info.title}`,
     `demuxProductId: ${info.demuxProductId}`,
@@ -42,10 +48,11 @@ function renderBatchHuman(info: DemuxExtractedFilesResult): string {
     `bytesDownloaded: ${info.bytesDownloaded}`,
     `bytesWritten: ${info.bytesWritten}`,
     `files:`,
-    ...info.files.map(
+    ...visibleFiles.map(
       (file) =>
         `  - ${file.manifestPath} | slices=${file.sliceCount} | bytes=${file.bytesWritten} | path=${file.outputPath}`
     ),
+    ...(omittedCount > 0 ? [`  ... ${omittedCount} more files omitted`] : []),
     `notes: ${info.notes.join(' | ')}`
   ].join('\n');
 }
@@ -169,6 +176,40 @@ export function registerExtractFileCommand(
           }
 
           process.stdout.write(`${renderBatchHuman(info)}\n`);
+        } finally {
+          await demuxService.destroy();
+        }
+      }
+    );
+
+  program
+    .command('download-game <query>')
+    .description(
+      'Experimentally reconstruct the full live manifest file set for an owned game into a local directory tree'
+    )
+    .option('--json', 'Output JSON')
+    .option(
+      '--output-dir <path>',
+      'Override the root output directory for the reconstructed game tree'
+    )
+    .action(
+      async (
+        query: string,
+        options: { json?: boolean; outputDir?: string }
+      ) => {
+        const context = await makeContext();
+        const demuxService = buildDemuxService(context);
+        try {
+          const info = await demuxService.downloadGame(query, {
+            outputDir: options.outputDir
+          });
+
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify(info, null, 2)}\n`);
+            return;
+          }
+
+          process.stdout.write(`${renderBatchHuman(info, 10)}\n`);
         } finally {
           await demuxService.destroy();
         }

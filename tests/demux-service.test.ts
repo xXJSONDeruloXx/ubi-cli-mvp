@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
-import { zstdCompressSync } from 'node:zlib';
+import { deflateSync, zstdCompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { DemuxService } from '../src/services/demux-service';
 
@@ -521,6 +521,104 @@ describe('demux service', () => {
     expect(reconstructed).toBe('Hello World');
   });
 
+  it('decompresses zlib-framed slice payloads for older manifests', async () => {
+    const compressedSlice = deflateSync(Buffer.from('legacy payload'));
+    const service = new DemuxService(
+      {
+        debugDir: '/tmp',
+        sessionFile: '/tmp/session.json'
+      } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined }),
+        debug: () => undefined
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'ticket',
+            sessionId: 'session',
+            userId: 'user'
+          })
+      } as never,
+      {
+        getDownloadUrlsForRelativePaths: (
+          _session: unknown,
+          _productId: number,
+          relativePaths: string[]
+        ) =>
+          Promise.resolve({
+            responses: relativePaths.map((relativePath) => ({
+              result: 0,
+              relativePath,
+              urls: [`https://example.test/${relativePath}`]
+            }))
+          })
+      } as never,
+      {
+        requestRaw: () =>
+          Promise.resolve({
+            status: 200,
+            body: compressedSlice
+          })
+      } as never
+    );
+
+    Object.assign(service as object, {
+      parseLiveManifest: () =>
+        Promise.resolve({
+          download: {
+            game: {
+              title: "Tom Clancy's Splinter Cell",
+              demuxProductId: 109,
+              publicProductId: 109
+            },
+            manifestHash: 'LIVEHASH'
+          },
+          parsed: {
+            chunks: [
+              {
+                files: [
+                  {
+                    name: 'bin/legacy.txt',
+                    size: 14,
+                    isDir: false,
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '1111111111111111111111111111111111111111',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: 14
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        })
+    });
+
+    const result = await service.extractFile(
+      '109',
+      'bin/legacy.txt',
+      '/tmp/ubi-extract-test/legacy.txt'
+    );
+
+    expect(result.bytesWritten).toBe(14);
+    expect(await readFile('/tmp/ubi-extract-test/legacy.txt', 'utf8')).toBe(
+      'legacy payload'
+    );
+  });
+
   it('falls back to sequential slice offsets when manifest slice fileOffset values are all zero defaults', async () => {
     const firstSlice = Buffer.from('MZ-first-half');
     const secondSlice = Buffer.from('second-half');
@@ -795,5 +893,127 @@ describe('demux service', () => {
       'bin/shared.txt'
     ]);
     expect(result.notes[2]).toContain('reuses downloaded slices');
+  });
+
+  it('downloads the full live manifest file set into an output tree', async () => {
+    const service = new DemuxService(
+      {
+        debugDir: '/tmp',
+        sessionFile: '/tmp/session.json'
+      } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined }),
+        debug: () => undefined
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'ticket',
+            sessionId: 'session',
+            userId: 'user'
+          })
+      } as never,
+      {
+        getDownloadUrlsForRelativePaths: (
+          _session: unknown,
+          _productId: number,
+          relativePaths: string[]
+        ) =>
+          Promise.resolve({
+            responses: relativePaths.map((relativePath) => ({
+              result: 0,
+              relativePath,
+              urls: [`https://example.test/${relativePath}`]
+            }))
+          })
+      } as never,
+      {
+        requestRaw: (url: string) =>
+          Promise.resolve({
+            status: 200,
+            body: url.includes('1111111111111111111111111111111111111111')
+              ? zstdCompressSync(Buffer.from('one'))
+              : zstdCompressSync(Buffer.from('two'))
+          })
+      } as never
+    );
+
+    Object.assign(service as object, {
+      parseLiveManifest: () =>
+        Promise.resolve({
+          download: {
+            game: {
+              title: "Tom Clancy's Splinter Cell",
+              demuxProductId: 109,
+              publicProductId: 109
+            },
+            manifestHash: 'LIVEHASH'
+          },
+          parsed: {
+            chunks: [
+              {
+                files: [
+                  {
+                    name: 'bin/one.txt',
+                    size: 3,
+                    isDir: false,
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '1111111111111111111111111111111111111111',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: 3
+                      }
+                    ]
+                  },
+                  {
+                    name: 'bin/two.txt',
+                    size: 3,
+                    isDir: false,
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '2222222222222222222222222222222222222222',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: 3
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        })
+    });
+
+    const result = await service.downloadGame('109', {
+      outputDir: '/tmp/ubi-download-game-test'
+    });
+
+    expect(
+      await readFile('/tmp/ubi-download-game-test/bin/one.txt', 'utf8')
+    ).toBe('one');
+    expect(
+      await readFile('/tmp/ubi-download-game-test/bin/two.txt', 'utf8')
+    ).toBe('two');
+    expect(result).toMatchObject({
+      matchedCount: 2,
+      extractedCount: 2,
+      sliceReferenceCount: 2,
+      uniqueSliceCount: 2,
+      outputDir: '/tmp/ubi-download-game-test'
+    });
+    expect(result.notes[0]).toContain('full live manifest file set');
   });
 });

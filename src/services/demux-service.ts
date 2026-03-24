@@ -7,7 +7,7 @@ import { DemuxClient } from '../core/demux-client';
 import { HttpClient } from '../core/http';
 import { loadUbisoftDemuxModule } from '../core/ubisoft-demux-loader';
 import type { AppPaths, RuntimeConfig } from '../models/config';
-import { zstdDecompressSync } from 'node:zlib';
+import { inflateSync, zstdDecompressSync } from 'node:zlib';
 import type {
   DemuxDownloadUrlsInfo,
   DemuxExtractedFileResult,
@@ -96,6 +96,7 @@ interface SliceResponseEntry {
 interface ExtractionCache {
   decompressedByHash: Map<string, Buffer>;
   compressedByHash: Map<string, Buffer>;
+  remainingReferencesByHash: Map<string, number>;
   diskCacheHitCount: number;
   memoryReuseHitCount: number;
   networkFetchCount: number;
@@ -134,6 +135,20 @@ function toNumber(value: unknown): number {
 
 function sha1Base64(value: Buffer): string {
   return createHash('sha1').update(value).digest('base64');
+}
+
+function isLikelyZlibFrame(body: Buffer): boolean {
+  if (body.length < 2) {
+    return false;
+  }
+
+  const cmf = body[0];
+  const flg = body[1];
+  if ((cmf & 0x0f) !== 0x08) {
+    return false;
+  }
+
+  return ((cmf << 8) + flg) % 31 === 0;
 }
 
 function chunkArray<T>(items: T[], chunkSize: number): T[][] {
@@ -388,6 +403,12 @@ export class DemuxService {
     const transferCache: ExtractionCache = {
       decompressedByHash: new Map<string, Buffer>(),
       compressedByHash: new Map<string, Buffer>(),
+      remainingReferencesByHash: new Map(
+        sliceUrls.urls
+          .map((entry) => entry.relativePath.split('/').at(-1)?.toUpperCase())
+          .filter((value): value is string => Boolean(value))
+          .map((hash) => [hash, 1])
+      ),
       diskCacheHitCount: 0,
       memoryReuseHitCount: 0,
       networkFetchCount: 0
@@ -468,13 +489,7 @@ export class DemuxService {
         file.name.replaceAll('\\', path.sep)
       );
 
-    const transferCache: ExtractionCache = {
-      decompressedByHash: new Map<string, Buffer>(),
-      compressedByHash: new Map<string, Buffer>(),
-      diskCacheHitCount: 0,
-      memoryReuseHitCount: 0,
-      networkFetchCount: 0
-    };
+    const transferCache = this.createExtractionCache([file]);
     const extracted = await this.extractManifestFileToPath(
       file,
       resolvedOutputPath,
@@ -498,6 +513,92 @@ export class DemuxService {
           : 'Manifest file did not expose per-slice decompressed SHA-1 hashes for validation.',
         this.describeSliceTransferStats(transferCache),
         'This command experimentally reconstructs a single manifest file from live slice payloads. It is not a full installer/update engine yet.'
+      ]
+    };
+  }
+
+  public async downloadGame(
+    query: string,
+    options: {
+      outputDir?: string;
+    } = {}
+  ): Promise<DemuxExtractedFilesResult> {
+    const prepared = await this.prepareLiveManifestExtraction(query);
+    const selectedFiles = prepared.files
+      .filter((entry) => !entry.isDir && typeof entry.name === 'string')
+      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+
+    if (selectedFiles.length === 0) {
+      throw new UserFacingError(
+        `No downloadable live manifest files were available for ${prepared.download.game.title}.`
+      );
+    }
+
+    const sliceReferenceCount = selectedFiles.reduce(
+      (sum, file) => sum + (file.sliceList?.length ?? 0),
+      0
+    );
+    const uniqueSliceHashes = this.collectSliceHexHashesForFiles(selectedFiles);
+    const session = await this.authService.ensureValidSession();
+    const { responsesByHash } = await this.resolveSliceUrlResponses(
+      session,
+      prepared.download.game.demuxProductId,
+      uniqueSliceHashes
+    );
+    const resolvedOutputDir =
+      options.outputDir ??
+      path.join(
+        this.paths.debugDir,
+        'demux-game',
+        `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`
+      );
+    const cache = this.createExtractionCache(selectedFiles);
+
+    let bytesDownloaded = 0;
+    let bytesWritten = 0;
+    const files: DemuxExtractedFilesResult['files'] = [];
+    for (const file of selectedFiles) {
+      if (!file.name) {
+        continue;
+      }
+
+      const resolvedOutputPath = path.join(
+        resolvedOutputDir,
+        file.name.replaceAll('\\', path.sep)
+      );
+      const extracted = await this.extractManifestFileToPath(
+        file,
+        resolvedOutputPath,
+        responsesByHash,
+        cache
+      );
+      bytesDownloaded += extracted.bytesDownloaded;
+      bytesWritten += extracted.bytesWritten;
+      files.push({
+        manifestPath: file.name,
+        outputPath: resolvedOutputPath,
+        sliceCount: extracted.sliceCount,
+        bytesWritten: extracted.bytesWritten
+      });
+    }
+
+    return {
+      title: prepared.download.game.title,
+      demuxProductId: prepared.download.game.demuxProductId,
+      publicProductId: prepared.download.game.publicProductId,
+      manifestHash: prepared.download.manifestHash,
+      outputDir: resolvedOutputDir,
+      matchedCount: selectedFiles.length,
+      extractedCount: files.length,
+      sliceReferenceCount,
+      uniqueSliceCount: uniqueSliceHashes.length,
+      bytesDownloaded,
+      bytesWritten,
+      files,
+      notes: [
+        'Selected the full live manifest file set for extraction.',
+        this.describeSliceTransferStats(cache),
+        'This command experimentally reconstructs an entire live manifest into a local directory tree. It is the closest current approximation of a full game download, but it is not yet a complete installer/update engine.'
       ]
     };
   }
@@ -554,13 +655,7 @@ export class DemuxService {
         'demux-files',
         `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`
       );
-    const cache: ExtractionCache = {
-      decompressedByHash: new Map<string, Buffer>(),
-      compressedByHash: new Map<string, Buffer>(),
-      diskCacheHitCount: 0,
-      memoryReuseHitCount: 0,
-      networkFetchCount: 0
-    };
+    const cache = this.createExtractionCache(selectedFiles);
 
     let bytesDownloaded = 0;
     let bytesWritten = 0;
@@ -644,6 +739,37 @@ export class DemuxService {
         )
       )
     ];
+  }
+
+  private countSliceReferencesForFiles(
+    files: ParsedManifestFileEntry[]
+  ): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const file of files) {
+      for (const slice of file.sliceList ?? []) {
+        if (!slice.downloadSha1) {
+          continue;
+        }
+
+        const hash = sliceTokenToHex(slice.downloadSha1);
+        counts.set(hash, (counts.get(hash) ?? 0) + 1);
+      }
+    }
+
+    return counts;
+  }
+
+  private createExtractionCache(
+    files: ParsedManifestFileEntry[]
+  ): ExtractionCache {
+    return {
+      decompressedByHash: new Map<string, Buffer>(),
+      compressedByHash: new Map<string, Buffer>(),
+      remainingReferencesByHash: this.countSliceReferencesForFiles(files),
+      diskCacheHitCount: 0,
+      memoryReuseHitCount: 0,
+      networkFetchCount: 0
+    };
   }
 
   private getSliceCachePath(sliceHash: string): string | undefined {
@@ -747,6 +873,25 @@ export class DemuxService {
     };
   }
 
+  private releaseSliceReference(
+    sliceHash: string,
+    cache: ExtractionCache
+  ): void {
+    const remaining = cache.remainingReferencesByHash.get(sliceHash);
+    if (remaining === undefined) {
+      return;
+    }
+
+    if (remaining <= 1) {
+      cache.remainingReferencesByHash.delete(sliceHash);
+      cache.decompressedByHash.delete(sliceHash);
+      cache.compressedByHash.delete(sliceHash);
+      return;
+    }
+
+    cache.remainingReferencesByHash.set(sliceHash, remaining - 1);
+  }
+
   private async extractManifestFileToPath(
     file: ParsedManifestFileEntry,
     outputPath: string,
@@ -840,6 +985,7 @@ export class DemuxService {
         );
         bytesWritten += decompressedBody.length;
         nextImplicitOffset = writeOffset + decompressedBody.length;
+        this.releaseSliceReference(sliceHash, cache);
       }
     } finally {
       await handle.close();
@@ -947,8 +1093,12 @@ export class DemuxService {
 
   private decompressSliceBody(body: Buffer): Buffer {
     const zstdMagic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
-    if (body.subarray(0, 4).equals(zstdMagic)) {
+    if (body.length >= 4 && body.subarray(0, 4).equals(zstdMagic)) {
       return Buffer.from(zstdDecompressSync(body));
+    }
+
+    if (isLikelyZlibFrame(body)) {
+      return Buffer.from(inflateSync(body));
     }
 
     return body;
