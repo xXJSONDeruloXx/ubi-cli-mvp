@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { deflateSync, zstdCompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { DemuxService } from '../src/services/demux-service';
@@ -292,6 +292,7 @@ describe('demux service', () => {
 
   it('reuses the persistent slice cache across repeated extraction runs', async () => {
     await rm('/tmp/ubi-demux-cache-test', { recursive: true, force: true });
+    await rm('/tmp/ubi-extract-cache-test', { recursive: true, force: true });
 
     const compressedSlice = zstdCompressSync(Buffer.from('cached payload'));
     let fetchCount = 0;
@@ -620,6 +621,8 @@ describe('demux service', () => {
   });
 
   it('falls back to sequential slice offsets when manifest slice fileOffset values are all zero defaults', async () => {
+    await rm('/tmp/ubi-extract-test/game.exe', { force: true });
+
     const firstSlice = Buffer.from('MZ-first-half');
     const secondSlice = Buffer.from('second-half');
     const firstSliceCompressed = zstdCompressSync(firstSlice);
@@ -737,6 +740,8 @@ describe('demux service', () => {
   });
 
   it('extracts multiple matching files while reusing downloaded slice payloads across the batch', async () => {
+    await rm('/tmp/ubi-extract-batch-test', { recursive: true, force: true });
+
     const sharedSlice = Buffer.from('Shared-');
     const uniqueSlice = Buffer.from('Unique');
     const sharedSliceCompressed = zstdCompressSync(sharedSlice);
@@ -896,6 +901,8 @@ describe('demux service', () => {
   });
 
   it('downloads the full live manifest file set into an output tree', async () => {
+    await rm('/tmp/ubi-download-game-test', { recursive: true, force: true });
+
     const service = new DemuxService(
       {
         debugDir: '/tmp',
@@ -1015,5 +1022,236 @@ describe('demux service', () => {
       outputDir: '/tmp/ubi-download-game-test'
     });
     expect(result.notes[0]).toContain('full live manifest file set');
+  });
+
+  it('refreshes signed slice URLs after a 403 during extraction', async () => {
+    await rm('/tmp/ubi-extract-test/refresh.txt', { force: true });
+
+    let urlRequestCount = 0;
+    const service = new DemuxService(
+      {
+        debugDir: '/tmp',
+        sessionFile: '/tmp/session.json'
+      } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined }),
+        debug: () => undefined
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'ticket',
+            sessionId: 'session',
+            userId: 'user'
+          })
+      } as never,
+      {
+        getDownloadUrlsForRelativePaths: (
+          _session: unknown,
+          _productId: number,
+          relativePaths: string[]
+        ) => {
+          urlRequestCount += 1;
+          const suffix = urlRequestCount === 1 ? 'expired' : 'fresh';
+          return Promise.resolve({
+            responses: relativePaths.map((relativePath) => ({
+              result: 0,
+              relativePath,
+              urls: [`https://example.test/${suffix}/${relativePath}`]
+            }))
+          });
+        }
+      } as never,
+      {
+        requestRaw: (url: string) =>
+          Promise.resolve(
+            url.includes('/expired/')
+              ? { status: 403, body: Buffer.from('') }
+              : {
+                  status: 200,
+                  body: zstdCompressSync(Buffer.from('fresh payload'))
+                }
+          )
+      } as never
+    );
+
+    Object.assign(service as object, {
+      parseLiveManifest: () =>
+        Promise.resolve({
+          download: {
+            game: {
+              title: 'Far Cry® 3',
+              demuxProductId: 46,
+              publicProductId: 46
+            },
+            manifestHash: 'LIVEHASH'
+          },
+          parsed: {
+            chunks: [
+              {
+                files: [
+                  {
+                    name: 'bin/refresh.txt',
+                    size: 13,
+                    isDir: false,
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '1111111111111111111111111111111111111111',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: 13
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        })
+    });
+
+    const result = await service.extractFile(
+      '46',
+      'bin/refresh.txt',
+      '/tmp/ubi-extract-test/refresh.txt'
+    );
+
+    expect(await readFile('/tmp/ubi-extract-test/refresh.txt', 'utf8')).toBe(
+      'fresh payload'
+    );
+    expect(urlRequestCount).toBe(2);
+    expect(result.notes[1]).toContain('urlRefreshes=1');
+  });
+
+  it('skips already reconstructed files during full-game resume runs', async () => {
+    await rm('/tmp/ubi-download-game-resume-test', {
+      recursive: true,
+      force: true
+    });
+    await mkdir('/tmp/ubi-download-game-resume-test/bin', { recursive: true });
+    await writeFile('/tmp/ubi-download-game-resume-test/bin/one.txt', 'one');
+
+    let fetchCount = 0;
+    const service = new DemuxService(
+      {
+        debugDir: '/tmp',
+        sessionFile: '/tmp/session.json'
+      } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined }),
+        debug: () => undefined
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'ticket',
+            sessionId: 'session',
+            userId: 'user'
+          })
+      } as never,
+      {
+        getDownloadUrlsForRelativePaths: (
+          _session: unknown,
+          _productId: number,
+          relativePaths: string[]
+        ) =>
+          Promise.resolve({
+            responses: relativePaths.map((relativePath) => ({
+              result: 0,
+              relativePath,
+              urls: [`https://example.test/${relativePath}`]
+            }))
+          })
+      } as never,
+      {
+        requestRaw: (url: string) => {
+          fetchCount += 1;
+          return Promise.resolve({
+            status: 200,
+            body: url.includes('2222222222222222222222222222222222222222')
+              ? zstdCompressSync(Buffer.from('two'))
+              : zstdCompressSync(Buffer.from('one'))
+          });
+        }
+      } as never
+    );
+
+    Object.assign(service as object, {
+      parseLiveManifest: () =>
+        Promise.resolve({
+          download: {
+            game: {
+              title: "Tom Clancy's Splinter Cell",
+              demuxProductId: 109,
+              publicProductId: 109
+            },
+            manifestHash: 'LIVEHASH'
+          },
+          parsed: {
+            chunks: [
+              {
+                files: [
+                  {
+                    name: 'bin/one.txt',
+                    size: 3,
+                    isDir: false,
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '1111111111111111111111111111111111111111',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: 3
+                      }
+                    ]
+                  },
+                  {
+                    name: 'bin/two.txt',
+                    size: 3,
+                    isDir: false,
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '2222222222222222222222222222222222222222',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: 3
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        })
+    });
+
+    const result = await service.downloadGame('109', {
+      outputDir: '/tmp/ubi-download-game-resume-test'
+    });
+
+    expect(fetchCount).toBe(1);
+    expect(
+      await readFile('/tmp/ubi-download-game-resume-test/bin/two.txt', 'utf8')
+    ).toBe('two');
+    expect(result.notes[1]).toContain('skippedExistingFiles=1');
   });
 });

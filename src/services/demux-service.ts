@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
 import { AuthService } from '../core/auth-service';
@@ -101,6 +101,11 @@ interface ExtractionCache {
     Promise<{ body: Buffer; bytesDownloaded: number }>
   >;
   remainingReferencesByHash: Map<string, number>;
+  refreshSliceEntry?: (
+    sliceHash: string
+  ) => Promise<SliceResponseEntry | undefined>;
+  refreshedUrlCount: number;
+  skippedExistingFileCount: number;
   diskCacheHitCount: number;
   memoryReuseHitCount: number;
   networkFetchCount: number;
@@ -141,6 +146,9 @@ function sha1Base64(value: Buffer): string {
   return createHash('sha1').update(value).digest('base64');
 }
 
+const SLICE_FETCH_TIMEOUT_MS = 300_000;
+const SLICE_FETCH_RETRY_COUNT = 1;
+
 function isLikelyZlibFrame(body: Buffer): boolean {
   if (body.length < 2) {
     return false;
@@ -162,6 +170,21 @@ function chunkArray<T>(items: T[], chunkSize: number): T[][] {
   }
 
   return chunks;
+}
+
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolveValue, rejectValue) => {
+    resolve = resolveValue;
+    reject = rejectValue;
+  });
+
+  return { promise, resolve, reject };
 }
 
 async function mapLimit<T, R>(
@@ -198,6 +221,7 @@ export class DemuxService {
   private readonly authService: AuthService;
   private readonly demuxClient: DemuxClient;
   private readonly httpClient: HttpClient;
+  private demuxRequestQueue: Promise<void> = Promise.resolve();
 
   public constructor(
     private readonly paths: AppPaths,
@@ -318,6 +342,27 @@ export class DemuxService {
     };
   }
 
+  private async withSerializedDemuxRequest<T>(
+    request: () => Promise<T>
+  ): Promise<T> {
+    const next = createDeferred<T>();
+    const previous = this.demuxRequestQueue;
+    this.demuxRequestQueue = next.promise.then(
+      () => undefined,
+      () => undefined
+    );
+
+    try {
+      await previous;
+      const result = await request();
+      next.resolve(result);
+      return result;
+    } catch (error) {
+      next.reject(error);
+      throw error;
+    }
+  }
+
   private async resolveSliceUrlResponses(
     session: Awaited<ReturnType<AuthService['ensureValidSession']>>,
     productId: number,
@@ -340,10 +385,12 @@ export class DemuxService {
       sliceHexHashes.flatMap((hash) => sliceHexToCandidateRelativePaths(hash)),
       256
     )) {
-      const result = await this.demuxClient.getDownloadUrlsForRelativePaths(
-        session,
-        productId,
-        candidateChunk
+      const result = await this.withSerializedDemuxRequest(() =>
+        this.demuxClient.getDownloadUrlsForRelativePaths(
+          session,
+          productId,
+          candidateChunk
+        )
       );
       ownershipTokenExpiresAt =
         result.ownershipTokenExpiresAt ?? ownershipTokenExpiresAt;
@@ -447,6 +494,8 @@ export class DemuxService {
           .filter((value): value is string => Boolean(value))
           .map((hash) => [hash, 1])
       ),
+      refreshedUrlCount: 0,
+      skippedExistingFileCount: 0,
       diskCacheHitCount: 0,
       memoryReuseHitCount: 0,
       networkFetchCount: 0
@@ -528,6 +577,10 @@ export class DemuxService {
       );
 
     const transferCache = this.createExtractionCache([file]);
+    transferCache.refreshSliceEntry = this.buildRefreshSliceEntryCallback(
+      prepared.download.game.demuxProductId,
+      responsesByHash
+    );
     const extracted = await this.extractManifestFileToPath(
       file,
       resolvedOutputPath,
@@ -592,6 +645,10 @@ export class DemuxService {
         `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`
       );
     const cache = this.createExtractionCache(selectedFiles);
+    cache.refreshSliceEntry = this.buildRefreshSliceEntryCallback(
+      prepared.download.game.demuxProductId,
+      responsesByHash
+    );
 
     const extractedEntries = await mapLimit(
       selectedFiles,
@@ -711,6 +768,10 @@ export class DemuxService {
         `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`
       );
     const cache = this.createExtractionCache(selectedFiles);
+    cache.refreshSliceEntry = this.buildRefreshSliceEntryCallback(
+      prepared.download.game.demuxProductId,
+      responsesByHash
+    );
 
     let bytesDownloaded = 0;
     let bytesWritten = 0;
@@ -814,6 +875,26 @@ export class DemuxService {
     return counts;
   }
 
+  private buildRefreshSliceEntryCallback(
+    productId: number,
+    responsesByHash: Map<string, SliceResponseEntry>
+  ): (sliceHash: string) => Promise<SliceResponseEntry | undefined> {
+    return async (sliceHash: string) => {
+      const session = await this.authService.ensureValidSession();
+      const refreshed = await this.resolveSliceUrlResponses(
+        session,
+        productId,
+        [sliceHash]
+      );
+      const entry = refreshed.responsesByHash.get(sliceHash);
+      if (entry) {
+        responsesByHash.set(sliceHash, entry);
+      }
+
+      return entry;
+    };
+  }
+
   private createExtractionCache(
     files: ParsedManifestFileEntry[]
   ): ExtractionCache {
@@ -825,6 +906,8 @@ export class DemuxService {
         Promise<{ body: Buffer; bytesDownloaded: number }>
       >(),
       remainingReferencesByHash: this.countSliceReferencesForFiles(files),
+      refreshedUrlCount: 0,
+      skippedExistingFileCount: 0,
       diskCacheHitCount: 0,
       memoryReuseHitCount: 0,
       networkFetchCount: 0
@@ -840,7 +923,35 @@ export class DemuxService {
   }
 
   private describeSliceTransferStats(cache: ExtractionCache): string {
-    return `Slice transfer stats: networkFetches=${cache.networkFetchCount} | diskCacheHits=${cache.diskCacheHitCount} | inProcessReuseHits=${cache.memoryReuseHitCount}`;
+    return `Slice transfer stats: networkFetches=${cache.networkFetchCount} | diskCacheHits=${cache.diskCacheHitCount} | inProcessReuseHits=${cache.memoryReuseHitCount} | urlRefreshes=${cache.refreshedUrlCount} | skippedExistingFiles=${cache.skippedExistingFileCount}`;
+  }
+
+  private async requestSliceFromUrls(entry: SliceResponseEntry): Promise<{
+    body?: Buffer;
+    successfulUrl?: string;
+    lastStatus?: number;
+  }> {
+    let compressedBody: Buffer | undefined;
+    let successfulUrl: string | undefined;
+    let lastStatus: number | undefined;
+    for (const url of entry.urls) {
+      const response = await this.httpClient.requestRaw(url, {
+        retryCount: SLICE_FETCH_RETRY_COUNT,
+        timeoutMs: SLICE_FETCH_TIMEOUT_MS
+      });
+      lastStatus = response.status;
+      if (response.status === 200) {
+        compressedBody = Buffer.from(response.body);
+        successfulUrl = url;
+        break;
+      }
+    }
+
+    return {
+      body: compressedBody,
+      successfulUrl,
+      lastStatus
+    };
   }
 
   private async fetchCompressedSlice(
@@ -874,19 +985,26 @@ export class DemuxService {
       }
     }
 
-    let compressedBody: Buffer | undefined;
-    let successfulUrl: string | undefined;
-    let lastStatus: number | undefined;
-    for (const url of entry.urls) {
-      const response = await this.httpClient.requestRaw(url, {
-        retryCount: 0,
-        timeoutMs: 60000
-      });
-      lastStatus = response.status;
-      if (response.status === 200) {
-        compressedBody = Buffer.from(response.body);
-        successfulUrl = url;
-        break;
+    let {
+      body: compressedBody,
+      successfulUrl,
+      lastStatus
+    } = await this.requestSliceFromUrls(entry);
+
+    if (
+      (!compressedBody || !successfulUrl) &&
+      lastStatus === 403 &&
+      cache.refreshSliceEntry
+    ) {
+      const refreshedEntry = await cache.refreshSliceEntry(sliceHash);
+      if (refreshedEntry) {
+        cache.refreshedUrlCount += 1;
+        ({
+          body: compressedBody,
+          successfulUrl,
+          lastStatus
+        } = await this.requestSliceFromUrls(refreshedEntry));
+        entry = refreshedEntry;
       }
     }
 
@@ -951,6 +1069,36 @@ export class DemuxService {
     }
   }
 
+  private async shouldSkipExistingExtraction(
+    file: ParsedManifestFileEntry,
+    outputPath: string,
+    cache: ExtractionCache
+  ): Promise<boolean> {
+    try {
+      const existing = await stat(outputPath);
+      if (!existing.isFile()) {
+        return false;
+      }
+
+      if (existing.size !== toNumber(file.size)) {
+        return false;
+      }
+
+      cache.skippedExistingFileCount += 1;
+      for (const slice of file.sliceList ?? []) {
+        if (!slice.downloadSha1) {
+          continue;
+        }
+
+        this.releaseSliceReference(sliceTokenToHex(slice.downloadSha1), cache);
+      }
+
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private releaseSliceReference(
     sliceHash: string,
     cache: ExtractionCache
@@ -993,7 +1141,6 @@ export class DemuxService {
     }
 
     await mkdir(path.dirname(outputPath), { recursive: true });
-    const handle = await open(outputPath, 'w');
     let bytesDownloaded = 0;
     let bytesWritten = 0;
     let nextImplicitOffset = 0;
@@ -1002,6 +1149,16 @@ export class DemuxService {
       file.sliceList.length > 1 &&
       file.sliceList.every((slice) => toNumber(slice.fileOffset) === 0);
 
+    if (await this.shouldSkipExistingExtraction(file, outputPath, cache)) {
+      return {
+        sliceCount: file.sliceList.length,
+        bytesDownloaded: 0,
+        bytesWritten: toNumber(file.size),
+        validatedSliceHashCount: 0
+      };
+    }
+
+    const handle = await open(outputPath, 'w');
     try {
       await handle.truncate(toNumber(file.size));
 
