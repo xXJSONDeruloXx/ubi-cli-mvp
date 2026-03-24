@@ -249,6 +249,7 @@ export class DemuxClient {
   private demux?: UbisoftDemuxLike;
   private authenticatedTicket?: string;
   private ownershipConnection?: DemuxConnectionLike;
+  private downloadConnection?: DemuxConnectionLike;
   private ownershipInitializedSessionId?: string;
   private cachedOwnedGames?: DemuxOwnedGamePayload[];
 
@@ -351,9 +352,7 @@ export class DemuxClient {
           );
         }
 
-        const demux = await this.getAuthenticatedDemux(session);
-        const downloadConnection =
-          await demux.openConnection('download_service');
+        const downloadConnection = await this.getDownloadConnection(session);
         const initializeResponse = (await downloadConnection.request({
           request: {
             requestId: 1,
@@ -424,6 +423,7 @@ export class DemuxClient {
     this.demux = undefined;
     this.authenticatedTicket = undefined;
     this.ownershipConnection = undefined;
+    this.downloadConnection = undefined;
     this.ownershipInitializedSessionId = undefined;
     this.cachedOwnedGames = undefined;
   }
@@ -501,6 +501,19 @@ export class DemuxClient {
     return this.ownershipConnection;
   }
 
+  private async getDownloadConnection(
+    session: StoredSession
+  ): Promise<DemuxConnectionLike> {
+    if (this.downloadConnection) {
+      await this.getAuthenticatedDemux(session);
+      return this.downloadConnection;
+    }
+
+    const demux = await this.getAuthenticatedDemux(session);
+    this.downloadConnection = await demux.openConnection('download_service');
+    return this.downloadConnection;
+  }
+
   private async getAuthenticatedDemux(
     session: StoredSession
   ): Promise<UbisoftDemuxLike> {
@@ -538,6 +551,7 @@ export class DemuxClient {
 
     this.authenticatedTicket = session.ticket;
     this.ownershipConnection = undefined;
+    this.downloadConnection = undefined;
     this.ownershipInitializedSessionId = undefined;
     this.cachedOwnedGames = undefined;
     this.logger.debug('authenticated demux client', {

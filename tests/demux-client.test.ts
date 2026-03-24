@@ -292,6 +292,146 @@ describe('demux client', () => {
     await client.destroy();
   });
 
+  it('reuses a single download_service connection across repeated URL lookups', async () => {
+    const openConnectionCalls: string[] = [];
+    const downloadRequests: unknown[] = [];
+    const moduleLoader = () =>
+      Promise.resolve({
+        UbisoftDemux: class {
+          public socket = {
+            push: () => Promise.resolve()
+          };
+
+          public basicRequest(payload: unknown) {
+            if (
+              typeof payload === 'object' &&
+              payload !== null &&
+              'getPatchInfoReq' in payload
+            ) {
+              return Promise.resolve({
+                getPatchInfoRsp: {
+                  success: true,
+                  latestVersion: 13099
+                }
+              });
+            }
+
+            return Promise.resolve({
+              authenticateRsp: {
+                success: true
+              }
+            });
+          }
+
+          public openConnection(
+            serviceName: 'ownership_service' | 'download_service'
+          ) {
+            openConnectionCalls.push(serviceName);
+            if (serviceName === 'ownership_service') {
+              return Promise.resolve({
+                connectionId: 1,
+                request: (payload: unknown) => {
+                  if (
+                    typeof payload === 'object' &&
+                    payload !== null &&
+                    'request' in payload &&
+                    typeof payload.request === 'object' &&
+                    payload.request !== null &&
+                    'initializeReq' in payload.request
+                  ) {
+                    return Promise.resolve({
+                      response: {
+                        initializeRsp: {
+                          success: true,
+                          ownedGames: { ownedGames: [] }
+                        }
+                      }
+                    });
+                  }
+
+                  return Promise.resolve({
+                    response: {
+                      ownershipTokenRsp: {
+                        token: 'ownership-token',
+                        expiration: 1774299000
+                      }
+                    }
+                  });
+                }
+              });
+            }
+
+            return Promise.resolve({
+              connectionId: 2,
+              request: (payload: unknown) => {
+                downloadRequests.push(payload);
+                if (
+                  typeof payload === 'object' &&
+                  payload !== null &&
+                  'request' in payload &&
+                  typeof payload.request === 'object' &&
+                  payload.request !== null &&
+                  'initializeReq' in payload.request
+                ) {
+                  return Promise.resolve({
+                    response: {
+                      initializeRsp: {
+                        ok: true
+                      }
+                    }
+                  });
+                }
+
+                return Promise.resolve({
+                  response: {
+                    urlRsp: {
+                      urlResponses: [
+                        {
+                          result: 0,
+                          relativeFilePath: 'slices_v3/a/HASH',
+                          downloadUrls: [
+                            { urls: ['https://example.test/slices_v3/a/HASH'] }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                });
+              }
+            });
+          }
+
+          public destroy() {
+            return Promise.resolve();
+          }
+        }
+      });
+
+    const client = new DemuxClient(createConfig(), createLogger(), {
+      moduleLoader
+    });
+    const session: StoredSession = {
+      ticket: 'ticket',
+      sessionId: 'session',
+      userId: 'user'
+    };
+
+    await client.getDownloadUrlsForRelativePaths(session, 109, [
+      'slices_v3/a/HASH'
+    ]);
+    await client.getDownloadUrlsForRelativePaths(session, 109, [
+      'slices_v3/a/HASH'
+    ]);
+
+    expect(openConnectionCalls).toEqual([
+      'ownership_service',
+      'download_service'
+    ]);
+    expect(downloadRequests).toHaveLength(4);
+
+    await client.destroy();
+  });
+
   it('extracts metadata and licenses URLs when the download service returns them as alternates on the manifest response', async () => {
     const moduleLoader = () =>
       Promise.resolve({
