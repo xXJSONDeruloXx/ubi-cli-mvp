@@ -107,12 +107,15 @@ Completed after the breakthrough:
 - A later Splinter Cell full-tree reconstruction attempt surfaced two more important findings:
   - some older manifests use **zlib-framed** slice payloads rather than zstd; adding inflate support fixed at least one live Splinter Cell file that initially failed strict size validation
   - a long-running `download-game 109` attempt later hit signed slice URL `403` failures, which showed that real full-game downloads need signed-URL refresh / resume orchestration instead of one long uninterrupted pass
-- After adding signed-URL refresh, skip-existing resume behavior, and longer slice fetch timeouts, a later resumed `download-game 109 --workers 4 --output-dir /tmp/splinter-cell-download` run completed the full manifest tree too:
+- After adding signed-URL refresh, skip-existing resume behavior, longer slice fetch timeouts, and a pre-scan that avoids resolving slice URLs for already-complete files, a later resumed `download-game 109 --workers 4 --output-dir /tmp/splinter-cell-download` run completed the full manifest tree too.
+- An additional rerun over the now-complete tree reported:
   - `matchedCount: 5320`
   - `extractedCount: 5320`
-  - `sliceReferenceCount: 5880`
-  - `uniqueSliceCount: 5844`
-  - resumed run stats included `skippedExistingFiles: 5300` and `bytesDownloaded: 198679866`
+  - `sliceReferenceCount: 0`
+  - `uniqueSliceCount: 0`
+  - `bytesDownloaded: 0`
+  - `skippedExistingFiles: 5320`
+- That means repeat whole-tree validation is now dramatically cheaper once the local output tree is already present.
 - Whole-build reconstruction is still somewhat rough around the edges though: the repo can now reconstruct at least one full older game tree over multiple runs, but it still does not implement a hardened launcher-grade install/update engine.
 
 ### Current blocker frontier
