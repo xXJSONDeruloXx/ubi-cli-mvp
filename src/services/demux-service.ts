@@ -96,6 +96,10 @@ interface SliceResponseEntry {
 interface ExtractionCache {
   decompressedByHash: Map<string, Buffer>;
   compressedByHash: Map<string, Buffer>;
+  inFlightDecompressedByHash: Map<
+    string,
+    Promise<{ body: Buffer; bytesDownloaded: number }>
+  >;
   remainingReferencesByHash: Map<string, number>;
   diskCacheHitCount: number;
   memoryReuseHitCount: number;
@@ -158,6 +162,36 @@ function chunkArray<T>(items: T[], chunkSize: number): T[][] {
   }
 
   return chunks;
+}
+
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const concurrency = Math.max(1, limit);
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  const runWorker = async (): Promise<void> => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) {
+        return;
+      }
+
+      results[index] = await worker(items[index], index);
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () =>
+      runWorker()
+    )
+  );
+
+  return results;
 }
 
 export class DemuxService {
@@ -403,6 +437,10 @@ export class DemuxService {
     const transferCache: ExtractionCache = {
       decompressedByHash: new Map<string, Buffer>(),
       compressedByHash: new Map<string, Buffer>(),
+      inFlightDecompressedByHash: new Map<
+        string,
+        Promise<{ body: Buffer; bytesDownloaded: number }>
+      >(),
       remainingReferencesByHash: new Map(
         sliceUrls.urls
           .map((entry) => entry.relativePath.split('/').at(-1)?.toUpperCase())
@@ -521,6 +559,7 @@ export class DemuxService {
     query: string,
     options: {
       outputDir?: string;
+      workerCount?: number;
     } = {}
   ): Promise<DemuxExtractedFilesResult> {
     const prepared = await this.prepareLiveManifestExtraction(query);
@@ -554,33 +593,49 @@ export class DemuxService {
       );
     const cache = this.createExtractionCache(selectedFiles);
 
-    let bytesDownloaded = 0;
-    let bytesWritten = 0;
-    const files: DemuxExtractedFilesResult['files'] = [];
-    for (const file of selectedFiles) {
-      if (!file.name) {
-        continue;
-      }
+    const extractedEntries = await mapLimit(
+      selectedFiles,
+      Math.max(1, options.workerCount ?? 4),
+      async (file) => {
+        if (!file.name) {
+          return undefined;
+        }
 
-      const resolvedOutputPath = path.join(
-        resolvedOutputDir,
-        file.name.replaceAll('\\', path.sep)
-      );
-      const extracted = await this.extractManifestFileToPath(
-        file,
-        resolvedOutputPath,
-        responsesByHash,
-        cache
-      );
-      bytesDownloaded += extracted.bytesDownloaded;
-      bytesWritten += extracted.bytesWritten;
-      files.push({
-        manifestPath: file.name,
-        outputPath: resolvedOutputPath,
-        sliceCount: extracted.sliceCount,
-        bytesWritten: extracted.bytesWritten
-      });
-    }
+        const resolvedOutputPath = path.join(
+          resolvedOutputDir,
+          file.name.replaceAll('\\', path.sep)
+        );
+        const extracted = await this.extractManifestFileToPath(
+          file,
+          resolvedOutputPath,
+          responsesByHash,
+          cache
+        );
+        return {
+          manifestPath: file.name,
+          outputPath: resolvedOutputPath,
+          sliceCount: extracted.sliceCount,
+          bytesWritten: extracted.bytesWritten,
+          bytesDownloaded: extracted.bytesDownloaded
+        };
+      }
+    );
+
+    const files = extractedEntries.filter(
+      (
+        value
+      ): value is DemuxExtractedFilesResult['files'][number] & {
+        bytesDownloaded: number;
+      } => Boolean(value)
+    );
+    const bytesDownloaded = files.reduce(
+      (sum, file) => sum + file.bytesDownloaded,
+      0
+    );
+    const bytesWritten = files.reduce(
+      (sum, file) => sum + file.bytesWritten,
+      0
+    );
 
     return {
       title: prepared.download.game.title,
@@ -765,6 +820,10 @@ export class DemuxService {
     return {
       decompressedByHash: new Map<string, Buffer>(),
       compressedByHash: new Map<string, Buffer>(),
+      inFlightDecompressedByHash: new Map<
+        string,
+        Promise<{ body: Buffer; bytesDownloaded: number }>
+      >(),
       remainingReferencesByHash: this.countSliceReferencesForFiles(files),
       diskCacheHitCount: 0,
       memoryReuseHitCount: 0,
@@ -864,13 +923,32 @@ export class DemuxService {
       };
     }
 
-    const compressed = await this.fetchCompressedSlice(entry, sliceHash, cache);
-    const body = this.decompressSliceBody(compressed.body);
-    cache.decompressedByHash.set(sliceHash, body);
-    return {
-      body,
-      bytesDownloaded: compressed.bytesDownloaded
-    };
+    const inFlight = cache.inFlightDecompressedByHash.get(sliceHash);
+    if (inFlight) {
+      cache.memoryReuseHitCount += 1;
+      return inFlight;
+    }
+
+    const promise = (async () => {
+      const compressed = await this.fetchCompressedSlice(
+        entry,
+        sliceHash,
+        cache
+      );
+      const body = this.decompressSliceBody(compressed.body);
+      cache.decompressedByHash.set(sliceHash, body);
+      return {
+        body,
+        bytesDownloaded: compressed.bytesDownloaded
+      };
+    })();
+    cache.inFlightDecompressedByHash.set(sliceHash, promise);
+
+    try {
+      return await promise;
+    } finally {
+      cache.inFlightDecompressedByHash.delete(sliceHash);
+    }
   }
 
   private releaseSliceReference(
@@ -886,6 +964,7 @@ export class DemuxService {
       cache.remainingReferencesByHash.delete(sliceHash);
       cache.decompressedByHash.delete(sliceHash);
       cache.compressedByHash.delete(sliceHash);
+      cache.inFlightDecompressedByHash.delete(sliceHash);
       return;
     }
 

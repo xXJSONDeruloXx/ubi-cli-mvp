@@ -192,16 +192,23 @@ export function registerExtractFileCommand(
       '--output-dir <path>',
       'Override the root output directory for the reconstructed game tree'
     )
+    .option(
+      '--workers <n>',
+      'Number of manifest files to reconstruct concurrently',
+      '4'
+    )
     .action(
       async (
         query: string,
-        options: { json?: boolean; outputDir?: string }
+        options: { json?: boolean; outputDir?: string; workers?: string }
       ) => {
         const context = await makeContext();
         const demuxService = buildDemuxService(context);
         try {
+          const workerCount = Number.parseInt(options.workers ?? '4', 10);
           const info = await demuxService.downloadGame(query, {
-            outputDir: options.outputDir
+            outputDir: options.outputDir,
+            workerCount: Number.isNaN(workerCount) ? 4 : workerCount
           });
 
           if (options.json) {
