@@ -1277,17 +1277,20 @@ describe('demux service', () => {
     ).toBe(false);
   });
 
-  it('skips already reconstructed files during full-game resume runs', async () => {
+  it('skips only state-verified files during full-game resume runs', async () => {
     await rm('/tmp/ubi-download-game-resume-test', {
       recursive: true,
       force: true
     });
-    await mkdir('/tmp/ubi-download-game-resume-test/bin', { recursive: true });
-    await writeFile('/tmp/ubi-download-game-resume-test/bin/one.txt', 'one');
+    await rm('/tmp/ubi-download-state-resume', {
+      recursive: true,
+      force: true
+    });
 
     let fetchCount = 0;
     const service = new DemuxService(
       {
+        dataDir: '/tmp/ubi-download-state-resume',
         debugDir: '/tmp',
         sessionFile: '/tmp/session.json'
       } as never,
@@ -1389,14 +1392,18 @@ describe('demux service', () => {
         })
     });
 
-    const result = await service.downloadGame('109', {
+    const first = await service.downloadGame('109', {
+      outputDir: '/tmp/ubi-download-game-resume-test'
+    });
+    const second = await service.downloadGame('109', {
       outputDir: '/tmp/ubi-download-game-resume-test'
     });
 
-    expect(fetchCount).toBe(1);
+    expect(fetchCount).toBe(2);
     expect(
       await readFile('/tmp/ubi-download-game-resume-test/bin/two.txt', 'utf8')
     ).toBe('two');
-    expect(result.notes[1]).toContain('skippedExistingFiles=1');
+    expect(first.notes[1]).toContain('skippedExistingFiles=0');
+    expect(second.notes[1]).toContain('skippedExistingFiles=2');
   });
 });

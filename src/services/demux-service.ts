@@ -1,13 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import {
-  mkdir,
-  open,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile
-} from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
 import { AuthService } from '../core/auth-service';
@@ -39,6 +31,7 @@ import {
 } from '../util/manifest-paths';
 import { normalizeForMatch, scoreTitleMatch } from '../util/matching';
 import type { Logger } from '../util/logger';
+import { DownloadStateStore } from './download-state';
 import type { ProductService } from './product-service';
 import type { PublicCatalogService } from './public-catalog-service';
 
@@ -121,6 +114,14 @@ interface ExtractionCache {
   diskCacheHitCount: number;
   memoryReuseHitCount: number;
   networkFetchCount: number;
+  isVerifiedExistingFile?: (
+    file: ParsedManifestFileEntry,
+    outputPath: string
+  ) => Promise<boolean>;
+  recordCompletedFile?: (
+    file: ParsedManifestFileEntry,
+    outputPath: string
+  ) => Promise<void>;
 }
 
 interface PreparedLiveManifestExtraction {
@@ -625,6 +626,7 @@ export class DemuxService {
     options: {
       outputDir?: string;
       workerCount?: number;
+      restart?: boolean;
     } = {}
   ): Promise<DemuxExtractedFilesResult> {
     const prepared = await this.prepareLiveManifestExtraction(query);
@@ -646,6 +648,18 @@ export class DemuxService {
         `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`
       );
     const workerCount = Math.max(1, options.workerCount ?? 4);
+    const state = await DownloadStateStore.open(
+      this.paths,
+      {
+        demuxProductId: prepared.download.game.demuxProductId,
+        manifestHash: prepared.download.manifestHash,
+        manifestBody:
+          prepared.download.body ??
+          Buffer.from(prepared.download.manifestHash, 'utf8'),
+        outputRoot: resolvedOutputDir
+      },
+      { restart: options.restart }
+    );
     const filePlans = await mapLimit(
       selectedFiles,
       workerCount,
@@ -655,7 +669,11 @@ export class DemuxService {
           file.name ?? '(unknown)'
         );
         const skipExisting = file.name
-          ? await this.isExistingExtractionComplete(file, resolvedOutputPath)
+          ? await state.isComplete(
+              file.name,
+              resolvedOutputPath,
+              toNumber(file.size)
+            )
           : false;
         return {
           file,
@@ -684,6 +702,14 @@ export class DemuxService {
       pendingPlans.map((plan) => plan.file)
     );
     cache.skippedExistingFileCount = skippedPlans.length;
+    cache.isVerifiedExistingFile = (file, outputPath) =>
+      file.name
+        ? state.isComplete(file.name, outputPath, toNumber(file.size))
+        : Promise.resolve(false);
+    cache.recordCompletedFile = (file, outputPath) =>
+      file.name
+        ? state.recordCompleted(file.name, outputPath, toNumber(file.size))
+        : Promise.resolve();
     cache.refreshSliceEntry = this.buildRefreshSliceEntryCallback(
       prepared.download.game.demuxProductId,
       responsesByHash
@@ -762,6 +788,7 @@ export class DemuxService {
       notes: [
         'Selected the full live manifest file set for extraction.',
         this.describeSliceTransferStats(cache),
+        `Resume state: ${state.filePath}`,
         'This command experimentally reconstructs an entire live manifest into a local directory tree. It is the closest current approximation of a full game download, but it is not yet a complete installer/update engine.'
       ]
     };
@@ -1122,24 +1149,15 @@ export class DemuxService {
     }
   }
 
-  private async isExistingExtractionComplete(
-    file: ParsedManifestFileEntry,
-    outputPath: string
-  ): Promise<boolean> {
-    try {
-      const existing = await stat(outputPath);
-      return existing.isFile() && existing.size === toNumber(file.size);
-    } catch {
-      return false;
-    }
-  }
-
   private async shouldSkipExistingExtraction(
     file: ParsedManifestFileEntry,
     outputPath: string,
     cache: ExtractionCache
   ): Promise<boolean> {
-    if (!(await this.isExistingExtractionComplete(file, outputPath))) {
+    if (
+      !cache.isVerifiedExistingFile ||
+      !(await cache.isVerifiedExistingFile(file, outputPath))
+    ) {
       return false;
     }
 
@@ -1312,6 +1330,7 @@ export class DemuxService {
       await handle.close();
       handle = undefined;
       await rename(temporaryOutputPath, outputPath);
+      await cache.recordCompletedFile?.(file, outputPath);
     } catch (error) {
       if (handle) {
         await handle.close();
