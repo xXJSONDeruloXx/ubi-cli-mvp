@@ -43,4 +43,19 @@ describe('cli smoke test', () => {
     expect(stdout).toContain('extract-files');
     expect(stdout).toContain('download-game');
   }, 120_000);
+
+  it('advertises bounded full-game download safeguards', async () => {
+    const stdout = await run('node', [
+      'dist/index.js',
+      'download-game',
+      '--help'
+    ]);
+
+    expect(stdout).toContain('--limit');
+    expect(stdout).toContain('--max-install-bytes');
+    expect(stdout).toContain('--all');
+    expect(stdout).toContain('--yes');
+    expect(stdout).toContain('--dry-run');
+    expect(stdout).toContain('--restart');
+  }, 120_000);
 });

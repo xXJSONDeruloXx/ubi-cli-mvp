@@ -107,6 +107,10 @@ export interface DemuxExtractedFilesResult {
   bytesDownloaded: number;
   bytesWritten: number;
   files: DemuxExtractedFilesItem[];
+  availableFileCount?: number;
+  selectionTruncated?: boolean;
+  plannedInstallBytes?: number;
+  dryRun?: boolean;
   notes: string[];
 }
 

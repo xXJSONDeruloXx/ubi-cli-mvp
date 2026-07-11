@@ -11,6 +11,7 @@ import { DemuxService } from '../services/demux-service';
 import { LibraryService } from '../services/library-service';
 import { ProductService } from '../services/product-service';
 import { PublicCatalogService } from '../services/public-catalog-service';
+import { UserFacingError } from '../util/errors';
 import type { CliContext } from './context';
 
 function renderHuman(info: DemuxExtractedFileResult): string {
@@ -28,6 +29,21 @@ function renderHuman(info: DemuxExtractedFileResult): string {
   ].join('\n');
 }
 
+function parseBoundedInteger(
+  value: string | undefined,
+  label: string,
+  minimum: number,
+  maximum: number
+): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new UserFacingError(
+      `${label} must be a whole number between ${minimum} and ${maximum}.`
+    );
+  }
+  return parsed;
+}
+
 function renderBatchHuman(
   info: DemuxExtractedFilesResult,
   maxFiles = Number.POSITIVE_INFINITY
@@ -41,7 +57,11 @@ function renderBatchHuman(
     `publicProductId: ${info.publicProductId ?? 'unknown'}`,
     `manifestHash: ${info.manifestHash}`,
     `outputDir: ${info.outputDir}`,
+    `availableFileCount: ${info.availableFileCount ?? info.matchedCount}`,
     `matchedCount: ${info.matchedCount}`,
+    `selectionTruncated: ${info.selectionTruncated ?? false}`,
+    `plannedInstallBytes: ${info.plannedInstallBytes ?? info.bytesWritten}`,
+    `dryRun: ${info.dryRun ?? false}`,
     `extractedCount: ${info.extractedCount}`,
     `sliceReferenceCount: ${info.sliceReferenceCount}`,
     `uniqueSliceCount: ${info.uniqueSliceCount}`,
@@ -185,9 +205,24 @@ export function registerExtractFileCommand(
   program
     .command('download-game <query>')
     .description(
-      'Experimentally reconstruct the full live manifest file set for an owned game into a local directory tree'
+      'Safely reconstruct a bounded subset of an owned live manifest; --all --yes is required for a full game'
     )
     .option('--json', 'Output JSON')
+    .option('--limit <n>', 'Maximum files to select without --all', '10')
+    .option(
+      '--max-install-bytes <n>',
+      'Maximum selected install bytes (default: 1073741824 without --all)'
+    )
+    .option('--all', 'Select the full live manifest file set')
+    .option('--yes', 'Acknowledge an unbounded --all game download')
+    .option(
+      '--dry-run',
+      'Validate and show the bounded selection without writing files'
+    )
+    .option(
+      '--restart',
+      'Discard incompatible resume state for this output directory'
+    )
     .option(
       '--output-dir <path>',
       'Override the root output directory for the reconstructed game tree'
@@ -200,15 +235,55 @@ export function registerExtractFileCommand(
     .action(
       async (
         query: string,
-        options: { json?: boolean; outputDir?: string; workers?: string }
+        options: {
+          json?: boolean;
+          outputDir?: string;
+          workers?: string;
+          limit?: string;
+          maxInstallBytes?: string;
+          all?: boolean;
+          yes?: boolean;
+          dryRun?: boolean;
+          restart?: boolean;
+        }
       ) => {
         const context = await makeContext();
         const demuxService = buildDemuxService(context);
         try {
-          const workerCount = Number.parseInt(options.workers ?? '4', 10);
+          if (options.all && !options.yes) {
+            throw new UserFacingError(
+              'Refusing an unbounded game download without --all --yes.'
+            );
+          }
+
+          const workerCount = parseBoundedInteger(
+            options.workers ?? '4',
+            '--workers',
+            1,
+            8
+          );
+          const fileLimit = parseBoundedInteger(
+            options.limit ?? '10',
+            '--limit',
+            1,
+            100_000
+          );
+          const maxInstallBytes = options.maxInstallBytes
+            ? parseBoundedInteger(
+                options.maxInstallBytes,
+                '--max-install-bytes',
+                1,
+                Number.MAX_SAFE_INTEGER
+              )
+            : undefined;
           const info = await demuxService.downloadGame(query, {
             outputDir: options.outputDir,
-            workerCount: Number.isNaN(workerCount) ? 4 : workerCount
+            workerCount,
+            fileLimit,
+            maxInstallBytes,
+            allowAll: options.all,
+            dryRun: options.dryRun,
+            restart: options.restart
           });
 
           if (options.json) {

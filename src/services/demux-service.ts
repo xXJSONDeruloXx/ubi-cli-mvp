@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  statfs,
+  writeFile
+} from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
 import { AuthService } from '../core/auth-service';
@@ -161,6 +169,8 @@ function sha1Base64(value: Buffer): string {
 
 const SLICE_FETCH_TIMEOUT_MS = 300_000;
 const SLICE_FETCH_RETRY_COUNT = 1;
+const DEFAULT_GAME_FILE_LIMIT = 10;
+const DEFAULT_GAME_MAX_INSTALL_BYTES = 1024 * 1024 * 1024;
 
 function isLikelyZlibFrame(body: Buffer): boolean {
   if (body.length < 2) {
@@ -627,16 +637,56 @@ export class DemuxService {
       outputDir?: string;
       workerCount?: number;
       restart?: boolean;
+      fileLimit?: number;
+      maxInstallBytes?: number;
+      allowAll?: boolean;
+      dryRun?: boolean;
     } = {}
   ): Promise<DemuxExtractedFilesResult> {
     const prepared = await this.prepareLiveManifestExtraction(query);
-    const selectedFiles = prepared.files
+    const availableFiles = prepared.files
       .filter((entry) => !entry.isDir && typeof entry.name === 'string')
       .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
 
-    if (selectedFiles.length === 0) {
+    if (availableFiles.length === 0) {
       throw new UserFacingError(
         `No downloadable live manifest files were available for ${prepared.download.game.title}.`
+      );
+    }
+
+    const fileLimit = options.allowAll
+      ? availableFiles.length
+      : Math.max(1, options.fileLimit ?? DEFAULT_GAME_FILE_LIMIT);
+    const maxInstallBytes = options.allowAll
+      ? options.maxInstallBytes
+      : (options.maxInstallBytes ?? DEFAULT_GAME_MAX_INSTALL_BYTES);
+    const selectedFiles: ParsedManifestFileEntry[] = [];
+    let plannedInstallBytes = 0;
+    for (const file of availableFiles.slice(0, fileLimit)) {
+      const fileSize = toNumber(file.size);
+      if (!Number.isSafeInteger(fileSize) || fileSize < 0) {
+        throw new UserFacingError(
+          `Manifest file "${file.name}" declared an invalid file size.`
+        );
+      }
+      if (
+        maxInstallBytes !== undefined &&
+        plannedInstallBytes + fileSize > maxInstallBytes
+      ) {
+        if (selectedFiles.length === 0) {
+          throw new UserFacingError(
+            `The first selected file requires ${fileSize} bytes, exceeding the configured download safety limit of ${maxInstallBytes} bytes.`
+          );
+        }
+        break;
+      }
+      selectedFiles.push(file);
+      plannedInstallBytes += fileSize;
+    }
+
+    if (selectedFiles.length === 0) {
+      throw new UserFacingError(
+        'No files fit within the configured download safety limits.'
       );
     }
 
@@ -647,7 +697,40 @@ export class DemuxService {
         'demux-game',
         `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`
       );
-    const workerCount = Math.max(1, options.workerCount ?? 4);
+    const workerCount = Math.min(8, Math.max(1, options.workerCount ?? 4));
+    const selectionTruncated = selectedFiles.length < availableFiles.length;
+
+    if (options.dryRun) {
+      return {
+        title: prepared.download.game.title,
+        demuxProductId: prepared.download.game.demuxProductId,
+        publicProductId: prepared.download.game.publicProductId,
+        manifestHash: prepared.download.manifestHash,
+        outputDir: resolvedOutputDir,
+        matchedCount: selectedFiles.length,
+        extractedCount: 0,
+        sliceReferenceCount: selectedFiles.reduce(
+          (sum, file) => sum + (file.sliceList?.length ?? 0),
+          0
+        ),
+        uniqueSliceCount:
+          this.collectSliceHexHashesForFiles(selectedFiles).length,
+        bytesDownloaded: 0,
+        bytesWritten: 0,
+        files: [],
+        availableFileCount: availableFiles.length,
+        selectionTruncated,
+        plannedInstallBytes,
+        dryRun: true,
+        notes: [
+          'Dry run: no slice URLs were requested and no files were written.',
+          selectionTruncated
+            ? 'Selection was bounded by the configured file or byte safety limit.'
+            : 'Selection includes the complete live manifest file set.'
+        ]
+      };
+    }
+
     const state = await DownloadStateStore.open(
       this.paths,
       {
@@ -684,6 +767,21 @@ export class DemuxService {
     );
     const pendingPlans = filePlans.filter((plan) => !plan.skipExisting);
     const skippedPlans = filePlans.filter((plan) => plan.skipExisting);
+    await ensureSafeManifestOutputParent(
+      resolvedOutputDir,
+      path.join(path.resolve(resolvedOutputDir), '.ubi-preflight')
+    );
+    const requiredBytes = pendingPlans.reduce(
+      (sum, plan) => sum + toNumber(plan.file.size),
+      0
+    );
+    const filesystem = await statfs(resolvedOutputDir);
+    const availableBytes = Number(filesystem.bavail) * Number(filesystem.bsize);
+    if (!Number.isFinite(availableBytes) || availableBytes < requiredBytes) {
+      throw new UserFacingError(
+        `Insufficient free disk space for the selected files: ${requiredBytes} bytes required, ${availableBytes} bytes available.`
+      );
+    }
 
     const sliceReferenceCount = pendingPlans.reduce(
       (sum, plan) => sum + (plan.file.sliceList?.length ?? 0),
@@ -780,13 +878,18 @@ export class DemuxService {
       outputDir: resolvedOutputDir,
       matchedCount: selectedFiles.length,
       extractedCount: files.length,
+      availableFileCount: availableFiles.length,
+      selectionTruncated,
+      plannedInstallBytes,
       sliceReferenceCount,
       uniqueSliceCount: uniqueSliceHashes.length,
       bytesDownloaded,
       bytesWritten,
       files,
       notes: [
-        'Selected the full live manifest file set for extraction.',
+        selectionTruncated
+          ? 'Selected a bounded subset of the live manifest file set.'
+          : 'Selected the full live manifest file set for extraction.',
         this.describeSliceTransferStats(cache),
         `Resume state: ${state.filePath}`,
         'This command experimentally reconstructs an entire live manifest into a local directory tree. It is the closest current approximation of a full game download, but it is not yet a complete installer/update engine.'

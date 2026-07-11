@@ -99,18 +99,21 @@ export async function ensureSafeManifestOutputParent(
   let current = root;
   for (const segment of relativeParent ? relativeParent.split(path.sep) : []) {
     current = path.join(current, segment);
+    let stats;
     try {
-      const stats = await lstat(current);
-      if (!stats.isDirectory() || stats.isSymbolicLink()) {
-        throw new UserFacingError(
-          `Refusing manifest output through unsafe directory "${segment}".`
-        );
-      }
+      stats = await lstat(current);
     } catch (error) {
-      if (error instanceof UserFacingError) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw error;
       }
-      await mkdir(current);
+      await mkdir(current, { recursive: true });
+      stats = await lstat(current);
+    }
+
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+      throw new UserFacingError(
+        `Refusing manifest output through unsafe directory "${segment}".`
+      );
     }
   }
 }
