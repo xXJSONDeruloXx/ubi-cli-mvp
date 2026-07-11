@@ -17,6 +17,7 @@ import { registerFilesCommand } from './cli/files';
 import { registerInfoCommand } from './cli/info';
 import { registerListCommand } from './cli/list';
 import { registerManifestCommand } from './cli/manifest';
+import { registerRunCommand } from './cli/run';
 import { registerSearchCommand } from './cli/search';
 import { registerSliceUrlsCommand } from './cli/slice-urls';
 import { UserFacingError } from './util/errors';
@@ -47,6 +48,7 @@ async function main(): Promise<void> {
   registerSliceUrlsCommand(program, makeContext);
   registerDownloadSlicesCommand(program, makeContext);
   registerExtractFileCommand(program, makeContext);
+  registerRunCommand(program);
   registerAddonsCommand(program, makeContext);
   registerDoctorCommand(program, makeContext);
   registerConfigCommand(program, makeContext);

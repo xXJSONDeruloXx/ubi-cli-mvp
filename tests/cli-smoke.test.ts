@@ -42,6 +42,7 @@ describe('cli smoke test', () => {
     expect(stdout).toContain('extract-file');
     expect(stdout).toContain('extract-files');
     expect(stdout).toContain('download-game');
+    expect(stdout).toContain('run');
   }, 120_000);
 
   it('advertises bounded full-game download safeguards', async () => {

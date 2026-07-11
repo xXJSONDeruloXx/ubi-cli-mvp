@@ -243,7 +243,18 @@ node dist/index.js download-game 109 --all --yes --output-dir /games/splinter-ce
 
 Completed files are recorded in a manifest-bound, SHA-256-verified local resume state. Use `--restart` only when deliberately replacing incompatible state.
 
-### 13. Explore associated products / DLC-like entries
+### 13. Launch a reconstructed Windows game
+
+On Linux, `run` uses `wine` by default; on Windows it launches the selected executable directly. Start with `--dry-run`; when a tree contains several executables, pass one explicitly.
+
+```bash
+node dist/index.js run /games/splinter-cell --dry-run
+node dist/index.js run /games/splinter-cell --executable System/SplinterCell.exe
+```
+
+This starts a game process but does not implement Ubisoft Connect/DRM, prefix management, or launcher integration.
+
+### 14. Explore associated products / DLC-like entries
 
 ```bash
 node dist/index.js addons 720 --limit 10
@@ -324,7 +335,8 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 4. The CLI can now parse live `.manifest`, `.metadata`, and `.licenses` assets, download raw slice blobs, persist raw slice cache entries, and experimentally reconstruct some individual files, small matching file batches, or even a full game tree over multiple runs, but it still does **not** provide a launcher-grade install/update engine.[3][5][19]
 5. Download-service asset and slice exposure still varies by title, entitlement row, compression format, and file path; the current implementation gracefully handles missing live `.metadata`/`.licenses` URLs, but `extract-file`, `extract-files`, and `download-game` remain experimental rather than universally reliable for every manifest path or title.[4][5][19]
 6. Long-running full-game runs can still surface operational rough edges such as signed-URL refresh churn and upstream service instability. The CLI performs bounded preflight by default and supports interrupt-driven cancellation, but it is not a launcher-grade installer, updater, or game runner yet.[19]
-7. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
+7. `ubi run` is a thin Wine/direct-process launcher. It does not configure Wine prefixes, Ubisoft Connect, DRM, controller mappings, or per-game runtime settings.
+8. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
 
 ## Roadmap
 
