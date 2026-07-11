@@ -130,11 +130,19 @@ interface ExtractionCache {
     file: ParsedManifestFileEntry,
     outputPath: string
   ) => Promise<void>;
+  signal?: AbortSignal;
 }
 
 interface PreparedLiveManifestExtraction {
   download: LiveManifestDownload;
   files: ParsedManifestFileEntry[];
+}
+
+export interface DownloadProgressEvent {
+  phase: 'preflight' | 'file-start' | 'file-complete';
+  completedFileCount: number;
+  selectedFileCount: number;
+  manifestPath?: string;
 }
 
 function toNumber(value: unknown): number {
@@ -213,7 +221,8 @@ function createDeferred<T>(): {
 async function mapLimit<T, R>(
   items: T[],
   limit: number,
-  worker: (item: T, index: number) => Promise<R>
+  worker: (item: T, index: number) => Promise<R>,
+  signal?: AbortSignal
 ): Promise<R[]> {
   const concurrency = Math.max(1, limit);
   const results = new Array<R>(items.length);
@@ -221,6 +230,7 @@ async function mapLimit<T, R>(
 
   const runWorker = async (): Promise<void> => {
     while (true) {
+      signal?.throwIfAborted();
       const index = nextIndex;
       nextIndex += 1;
       if (index >= items.length) {
@@ -641,8 +651,11 @@ export class DemuxService {
       maxInstallBytes?: number;
       allowAll?: boolean;
       dryRun?: boolean;
+      signal?: AbortSignal;
+      onProgress?: (event: DownloadProgressEvent) => void;
     } = {}
   ): Promise<DemuxExtractedFilesResult> {
+    options.signal?.throwIfAborted();
     const prepared = await this.prepareLiveManifestExtraction(query);
     const availableFiles = prepared.files
       .filter((entry) => !entry.isDir && typeof entry.name === 'string')
@@ -743,6 +756,11 @@ export class DemuxService {
       },
       { restart: options.restart }
     );
+    options.onProgress?.({
+      phase: 'preflight',
+      completedFileCount: 0,
+      selectedFileCount: selectedFiles.length
+    });
     const filePlans = await mapLimit(
       selectedFiles,
       workerCount,
@@ -763,7 +781,8 @@ export class DemuxService {
           outputPath: resolvedOutputPath,
           skipExisting
         };
-      }
+      },
+      options.signal
     );
     const pendingPlans = filePlans.filter((plan) => !plan.skipExisting);
     const skippedPlans = filePlans.filter((plan) => plan.skipExisting);
@@ -799,6 +818,7 @@ export class DemuxService {
     const cache = this.createExtractionCache(
       pendingPlans.map((plan) => plan.file)
     );
+    cache.signal = options.signal;
     cache.skippedExistingFileCount = skippedPlans.length;
     cache.isVerifiedExistingFile = (file, outputPath) =>
       file.name
@@ -813,10 +833,18 @@ export class DemuxService {
       responsesByHash
     );
 
+    let completedFileCount = skippedPlans.length;
     const extractedEntries = await mapLimit(
       pendingPlans,
       workerCount,
       async (plan) => {
+        options.signal?.throwIfAborted();
+        options.onProgress?.({
+          phase: 'file-start',
+          completedFileCount,
+          selectedFileCount: selectedFiles.length,
+          manifestPath: plan.file.name
+        });
         if (!plan.file.name) {
           return undefined;
         }
@@ -828,6 +856,13 @@ export class DemuxService {
           cache,
           resolvedOutputDir
         );
+        completedFileCount += 1;
+        options.onProgress?.({
+          phase: 'file-complete',
+          completedFileCount,
+          selectedFileCount: selectedFiles.length,
+          manifestPath: plan.file.name
+        });
         return {
           manifestPath: plan.file.name,
           outputPath: plan.outputPath,
@@ -835,7 +870,8 @@ export class DemuxService {
           bytesWritten: extracted.bytesWritten,
           bytesDownloaded: extracted.bytesDownloaded
         };
-      }
+      },
+      options.signal
     );
 
     const downloadedFiles = extractedEntries.filter(
@@ -1109,7 +1145,10 @@ export class DemuxService {
     return `Slice transfer stats: networkFetches=${cache.networkFetchCount} | diskCacheHits=${cache.diskCacheHitCount} | inProcessReuseHits=${cache.memoryReuseHitCount} | urlRefreshes=${cache.refreshedUrlCount} | skippedExistingFiles=${cache.skippedExistingFileCount}`;
   }
 
-  private async requestSliceFromUrls(entry: SliceResponseEntry): Promise<{
+  private async requestSliceFromUrls(
+    entry: SliceResponseEntry,
+    signal?: AbortSignal
+  ): Promise<{
     body?: Buffer;
     successfulUrl?: string;
     lastStatus?: number;
@@ -1118,9 +1157,11 @@ export class DemuxService {
     let successfulUrl: string | undefined;
     let lastStatus: number | undefined;
     for (const url of entry.urls) {
+      signal?.throwIfAborted();
       const response = await this.httpClient.requestRaw(url, {
         retryCount: SLICE_FETCH_RETRY_COUNT,
-        timeoutMs: SLICE_FETCH_TIMEOUT_MS
+        timeoutMs: SLICE_FETCH_TIMEOUT_MS,
+        signal
       });
       lastStatus = response.status;
       if (response.status === 200) {
@@ -1172,7 +1213,7 @@ export class DemuxService {
       body: compressedBody,
       successfulUrl,
       lastStatus
-    } = await this.requestSliceFromUrls(entry);
+    } = await this.requestSliceFromUrls(entry, cache.signal);
 
     if (
       (!compressedBody || !successfulUrl) &&
@@ -1186,7 +1227,7 @@ export class DemuxService {
           body: compressedBody,
           successfulUrl,
           lastStatus
-        } = await this.requestSliceFromUrls(refreshedEntry));
+        } = await this.requestSliceFromUrls(refreshedEntry, cache.signal));
         entry = refreshedEntry;
       }
     }
@@ -1231,6 +1272,7 @@ export class DemuxService {
     }
 
     const promise = (async () => {
+      cache.signal?.throwIfAborted();
       const compressed = await this.fetchCompressedSlice(
         entry,
         sliceHash,
@@ -1358,6 +1400,7 @@ export class DemuxService {
       await handle.truncate(expectedFileSize);
 
       for (const [index, slice] of file.sliceList.entries()) {
+        cache.signal?.throwIfAborted();
         if (!slice.downloadSha1) {
           throw new Error(
             `Manifest file "${file.name}" had a slice without downloadSha1.`

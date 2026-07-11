@@ -249,6 +249,14 @@ export function registerExtractFileCommand(
       ) => {
         const context = await makeContext();
         const demuxService = buildDemuxService(context);
+        const abortController = new AbortController();
+        const abortDownload = () => {
+          abortController.abort(
+            new UserFacingError('Download cancelled by interrupt.', 130)
+          );
+        };
+        process.once('SIGINT', abortDownload);
+        process.once('SIGTERM', abortDownload);
         try {
           if (options.all && !options.yes) {
             throw new UserFacingError(
@@ -283,7 +291,23 @@ export function registerExtractFileCommand(
             maxInstallBytes,
             allowAll: options.all,
             dryRun: options.dryRun,
-            restart: options.restart
+            restart: options.restart,
+            signal: abortController.signal,
+            onProgress: options.json
+              ? undefined
+              : (event) => {
+                  if (event.phase === 'preflight') {
+                    process.stderr.write(
+                      `Preparing ${event.selectedFileCount} file(s) for download...\n`
+                    );
+                    return;
+                  }
+                  if (event.phase === 'file-complete') {
+                    process.stderr.write(
+                      `[${event.completedFileCount}/${event.selectedFileCount}] ${event.manifestPath ?? '(unknown)'}\n`
+                    );
+                  }
+                }
           });
 
           if (options.json) {
@@ -293,6 +317,8 @@ export function registerExtractFileCommand(
 
           process.stdout.write(`${renderBatchHuman(info, 10)}\n`);
         } finally {
+          process.removeListener('SIGINT', abortDownload);
+          process.removeListener('SIGTERM', abortDownload);
           await demuxService.destroy();
         }
       }
