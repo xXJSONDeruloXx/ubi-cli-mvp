@@ -130,5 +130,12 @@ It is now the gap between **manifest/URL retrieval** and a full **chunk download
 
 - some titles do not expose a useful `latestManifest`
 - public/catalog product IDs do not always align 1:1 with Demux ownership IDs
-- the CLI does not yet reconstruct slice/chunk payloads into installed game files
-- update/resume/install-state orchestration is still unimplemented
+- current reconstruction is now available for selected files and whole manifest trees, but remains experimental and title/build dependent
+- launcher-grade update, repair, install registration, and game-launch orchestration are still unimplemented
+
+### 2026-07-11 downloader hardening
+
+- `download-game` now defaults to a bounded 10-file / 1-GiB selection and exposes `--dry-run`; full-tree work requires explicit `--all --yes`.
+- Manifest-controlled paths are contained below the requested output root, reject symlink traversal, and publish only after a synced temporary file is atomically renamed.
+- Resume state is bound to the product, manifest hash/body, and output root; it rehashes completed files with SHA-256 instead of trusting size alone.
+- A bounded live Origins tree download and SHA-256-verified zero-network resume succeeded. A whole Splinter Cell tree validation is being run separately.

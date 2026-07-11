@@ -57,7 +57,7 @@ npm run build
 Outcome:
 
 - `format:check`, `lint`, `typecheck`, and all tests passed.
-- Current automated test count: 44 tests across 17 test files.
+- Current automated test count: 60 tests across 18 test files.
 
 ### Auth / account
 
@@ -192,26 +192,19 @@ Interpretation:
 1. `ubi list` still relies on the public GraphQL library endpoint rather than replacing it wholesale with Demux ownership output.[6][9][19]
 2. Public-catalog product IDs do not always align 1:1 with Demux ownership product IDs, so cross-surface reconciliation still needs implementation work.[4][14][19]
 3. Live Demux manifest inspection works for owned products that expose a useful `latestManifest`, but not every entitlement row exposes one.[4][19]
-4. The CLI can fetch and parse live signed `.manifest`, `.metadata`, and `.licenses` assets and can also download raw slice payloads, but it still does **not** reconstruct those slices into full installed game files.[3][5][19]
+4. The CLI can fetch and parse live signed `.manifest`, `.metadata`, and `.licenses` assets, derive and download slices, and reconstruct selected files or an entire owned manifest tree. The `download-game` path is intentionally bounded by default, uses output-path containment, atomic publication, free-space preflight, and manifest-bound SHA-256 resume state; an unbounded whole-tree run requires `--all --yes`.[3][5][19]
 5. `ubi addons` currently exposes public associated products from the catalog graph; it does not prove add-on ownership for the authenticated account without Demux-backed ownership reconciliation.[4][12]
 6. A local `.env` file is supported for operator convenience, but blank override variables can interfere with runtime defaults if not normalized; this repo now trims blank values before applying overrides.
+7. The CLI is still not a launcher-grade installer, updater, repair tool, or game runner. Live title/build compatibility and post-download runtime integration remain separate validation work.
 
 ## Validation interpretation
 
-This repo currently demonstrates a **usable MVP** for:
+This repo currently demonstrates a **usable downloader MVP** for:
 
-- session login/logout
-- account identity lookup
-- live library listing via GraphQL with deduped summary output and search
-- source-backed product metadata lookup and public catalog disambiguation
-- public association-graph exploration for DLC-like products
-- reproducible manifest inspection, file listing, and dry-run download planning via public fixtures
-- validated and now exposed Demux transport/auth, ownership inspection, ownership-token retrieval, download-service URL retrieval, live `.manifest/.metadata/.licenses` parsing, slice-URL derivation, and raw-slice download flows for owned titles
+- session login/logout and account identity lookup
+- live GraphQL library listing, catalog disambiguation, and add-on graph exploration
+- public-fixture and live Demux manifest inspection, file listing, and dry-run planning
+- Demux ownership/auth, signed asset and slice URL retrieval, raw-slice caching, and decompression
+- experimental single-file, batch, bounded tree, and explicitly acknowledged whole-manifest reconstruction with verified resume metadata
 
-It does **not** yet implement chunk downloading/reconstruction or a full installer/update engine, but the remaining blocker is now post-manifest download orchestration rather than basic Demux connectivity.
-or DLC-like products
-
-- reproducible manifest inspection, file listing, and dry-run download planning via public fixtures
-- validated and now exposed Demux transport/auth, ownership inspection, ownership-token retrieval, download-service URL retrieval, live `.manifest/.metadata/.licenses` parsing, slice-URL derivation, and raw-slice download flows for owned titles
-
-It does **not** yet implement chunk downloading/reconstruction or a full installer/update engine, but the remaining blocker is now post-manifest download orchestration rather than basic Demux connectivity.
+It does **not** yet provide install/update/repair orchestration or game-launch integration.

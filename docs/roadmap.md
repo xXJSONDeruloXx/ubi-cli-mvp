@@ -38,7 +38,7 @@ Exit criteria:
 Exit criteria:
 
 - [x] Implement `ubi list`
-- [x] Prefer live Demux ownership; add fallback if needed _(evidence forced the GraphQL fallback path; live Demux is blocked and documented)_
+- [x] Add live Demux ownership alongside the resilient GraphQL library path; keep both surfaces because their identifiers and coverage differ
 - [x] Normalize account/product data
 - [x] Add JSON output
 - [x] Add parser/normalizer tests
@@ -87,3 +87,4 @@ Exit criteria:
 - 2026-03-24: Added signed-URL refresh on 403, skip-existing resume behavior, and parallel full-tree reconstruction workers; used those improvements to complete a full Splinter Cell manifest-tree download over multiple runs.
 - 2026-03-24: Added a pre-scan that skips slice URL resolution for already-complete files during full-tree resume runs, reducing repeated Splinter Cell validation to zero downloaded bytes on a complete rerun.
 - 2026-03-24: Reused a single Demux `download_service` connection across repeated URL lookups, added regression coverage for that behavior, and live-validated a full 5844-slice Splinter Cell URL-resolution run without the earlier listener warning.
+- 2026-07-11: Hardened session persistence and redacted login JSON secrets; added manifest-path containment, symlink-resistant output parents, atomic extraction publication, manifest-bound SHA-256 resume state, disk preflight, bounded/dry-run game selection, cancellation, and progress reporting. Whole-manifest downloads now require explicit `--all --yes`.

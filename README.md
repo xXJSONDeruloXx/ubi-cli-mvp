@@ -231,7 +231,19 @@ node dist/index.js extract-file 3539 'Support\\Readme\\English\\Readme.txt' --ou
 node dist/index.js extract-files 3539 'Support\\Readme' --prefix --limit 3 --output-dir /tmp/ubi-extract-batch-live
 ```
 
-### 12. Explore associated products / DLC-like entries
+### 12. Plan or reconstruct a game tree safely
+
+`download-game` is bounded to 10 files and 1 GiB by default. Start with a dry run, then use explicit limits. A whole-game run requires `--all --yes`.
+
+```bash
+node dist/index.js download-game 3539 --dry-run
+node dist/index.js download-game 3539 --limit 5 --max-install-bytes 524288000 --output-dir /tmp/ubi-game
+node dist/index.js download-game 109 --all --yes --output-dir /games/splinter-cell
+```
+
+Completed files are recorded in a manifest-bound, SHA-256-verified local resume state. Use `--restart` only when deliberately replacing incompatible state.
+
+### 13. Explore associated products / DLC-like entries
 
 ```bash
 node dist/index.js addons 720 --limit 10
@@ -272,6 +284,10 @@ The current MVP can experimentally reconstruct at least some individual files fr
 
 The current MVP can also experimentally reconstruct small batches of matching files from a live manifest. The batch extractor resolves slice URLs once for all matched files and reuses downloaded slice payloads across the batch when possible. This has been live-validated for multiple Origins readme files under `Support\Readme\...`, but it remains an exploratory workflow rather than a full installer/update engine.[19]
 
+### `ubi download-game 109 --dry-run`
+
+`download-game` can plan or reconstruct an owned game tree. Its default 10-file / 1-GiB bound, output-path containment checks, free-space preflight, atomic file publication, interrupt handling, and manifest-bound SHA-256 resume state make it suitable for controlled reconstruction runs. It deliberately requires `--all --yes` to opt into a whole manifest.[19]
+
 ## Architecture overview
 
 The codebase is split into thin CLI commands, core auth/config/transport helpers, service-layer workflows, and normalized domain models.
@@ -294,7 +310,10 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 - `.env` is ignored by git
 - session artifacts are stored locally in the app data directory
 - raw slice cache entries are stored locally under the cache directory by slice hash
-- logs redact session secrets where possible
+- `login --json` redacts ticket, session, and remember-me values
+- session files are atomically written with owner-only permissions; legacy session files are restricted when loaded
+- resume state stores manifest/output identifiers and completed-file SHA-256 values only; it never stores signed URLs or session values
+- verbose HTTP logs redact URL query strings, including signed-URL parameters
 - this MVP currently uses local file storage rather than OS keychain integration, because the goal was to validate the research flow first.[2][9]
 
 ## Limitations
@@ -304,7 +323,7 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 3. Live Demux manifest inspection now works for owned products that expose a useful `latestManifest`, but not every entitlement row exposes one.[4][19]
 4. The CLI can now parse live `.manifest`, `.metadata`, and `.licenses` assets, download raw slice blobs, persist raw slice cache entries, and experimentally reconstruct some individual files, small matching file batches, or even a full game tree over multiple runs, but it still does **not** provide a launcher-grade install/update engine.[3][5][19]
 5. Download-service asset and slice exposure still varies by title, entitlement row, compression format, and file path; the current implementation gracefully handles missing live `.metadata`/`.licenses` URLs, but `extract-file`, `extract-files`, and `download-game` remain experimental rather than universally reliable for every manifest path or title.[4][5][19]
-6. Long-running full-game runs can still surface operational rough edges such as signed-URL refresh churn and broader downloader hardening gaps; reusing a single `download_service` connection eliminated the earlier `MaxListenersExceededWarning` during large Splinter Cell slice-URL validation, but the full download path still needs more unattended-run hardening.[19]
+6. Long-running full-game runs can still surface operational rough edges such as signed-URL refresh churn and upstream service instability. The CLI performs bounded preflight by default and supports interrupt-driven cancellation, but it is not a launcher-grade installer, updater, or game runner yet.[19]
 7. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
 
 ## Roadmap
