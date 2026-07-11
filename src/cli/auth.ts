@@ -2,6 +2,7 @@ import process from 'node:process';
 import prompts from 'prompts';
 import type { Command } from 'commander';
 import { AuthService } from '../core/auth-service';
+import { redactSession } from '../core/session-store';
 import type { AccountIdentity } from '../models/account';
 import { UserFacingError } from '../util/errors';
 import type { CliContext } from './context';
@@ -142,7 +143,7 @@ export function registerAuthCommands(
 
           if (options.json) {
             process.stdout.write(
-              `${JSON.stringify(completed.session, null, 2)}\n`
+              `${JSON.stringify(redactSession(completed.session), null, 2)}\n`
             );
             return;
           }
@@ -154,7 +155,9 @@ export function registerAuthCommands(
         }
 
         if (options.json) {
-          process.stdout.write(`${JSON.stringify(login.session, null, 2)}\n`);
+          process.stdout.write(
+            `${JSON.stringify(redactSession(login.session), null, 2)}\n`
+          );
           return;
         }
 

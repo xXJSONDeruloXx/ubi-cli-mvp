@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -35,6 +35,7 @@ describe('session-store', () => {
     };
 
     await saveSession(paths, session);
+    expect((await stat(paths.sessionFile)).mode & 0o777).toBe(0o600);
     await expect(loadSession(paths)).resolves.toEqual(session);
     expect(redactSession(session)).toMatchObject({
       ticket: '<redacted>',
@@ -45,5 +46,20 @@ describe('session-store', () => {
 
     await clearSession(paths);
     await expect(loadSession(paths)).resolves.toBeNull();
+  });
+
+  it('restricts permissions when loading a legacy session file', async () => {
+    const paths = await makePaths();
+    const session = {
+      ticket: 'ticket-value',
+      sessionId: 'session-value',
+      userId: 'user-value'
+    };
+
+    await writeFile(paths.sessionFile, JSON.stringify(session), {
+      mode: 0o644
+    });
+    await expect(loadSession(paths)).resolves.toEqual(session);
+    expect((await stat(paths.sessionFile)).mode & 0o777).toBe(0o600);
   });
 });

@@ -1,6 +1,18 @@
-import { access, readFile, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
+import {
+  access,
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm
+} from 'node:fs/promises';
+import path from 'node:path';
 import type { AppPaths } from '../models/config';
+
+const SESSION_FILE_MODE = 0o600;
 
 export interface StoredSession {
   ticket: string;
@@ -30,6 +42,7 @@ export async function loadSession(
     return null;
   }
 
+  await chmod(paths.sessionFile, SESSION_FILE_MODE);
   const raw = await readFile(paths.sessionFile, 'utf8');
   return JSON.parse(raw) as StoredSession;
 }
@@ -38,7 +51,22 @@ export async function saveSession(
   paths: AppPaths,
   session: StoredSession
 ): Promise<void> {
-  await writeFile(paths.sessionFile, JSON.stringify(session, null, 2));
+  await mkdir(path.dirname(paths.sessionFile), { recursive: true });
+  const temporaryPath = `${paths.sessionFile}.${randomUUID()}.tmp`;
+  const handle = await open(temporaryPath, 'wx', SESSION_FILE_MODE);
+
+  try {
+    await handle.writeFile(JSON.stringify(session, null, 2));
+    await handle.sync();
+  } catch (error) {
+    await rm(temporaryPath, { force: true });
+    throw error;
+  } finally {
+    await handle.close();
+  }
+
+  await rename(temporaryPath, paths.sessionFile);
+  await chmod(paths.sessionFile, SESSION_FILE_MODE);
 }
 
 export async function clearSession(paths: AppPaths): Promise<void> {
