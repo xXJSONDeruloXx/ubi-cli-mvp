@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { deflateSync, zstdCompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { DemuxService } from '../src/services/demux-service';
@@ -1130,6 +1130,151 @@ describe('demux service', () => {
     );
     expect(urlRequestCount).toBe(2);
     expect(result.notes[1]).toContain('urlRefreshes=1');
+  });
+
+  it('rejects unsafe manifest paths before requesting download URLs', async () => {
+    let urlRequestCount = 0;
+    const service = new DemuxService(
+      { debugDir: '/tmp', sessionFile: '/tmp/session.json' } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined })
+      } as never,
+      {} as never,
+      undefined,
+      {} as never,
+      {
+        getDownloadUrlsForRelativePaths: () => {
+          urlRequestCount += 1;
+          return Promise.resolve({ responses: [] });
+        }
+      } as never,
+      {} as never
+    );
+
+    Object.assign(service as object, {
+      parseLiveManifest: () =>
+        Promise.resolve({
+          download: {
+            game: { title: 'Unsafe', demuxProductId: 46 },
+            manifestHash: 'LIVEHASH'
+          },
+          parsed: {
+            chunks: [
+              {
+                files: [
+                  {
+                    name: '../escape.txt',
+                    size: 1,
+                    isDir: false,
+                    sliceList: []
+                  }
+                ]
+              }
+            ]
+          }
+        })
+    });
+
+    await expect(
+      service.downloadGame('46', { outputDir: '/tmp/ubi-unsafe-output' })
+    ).rejects.toThrow(/unsafe manifest output path/);
+    expect(urlRequestCount).toBe(0);
+  });
+
+  it('preserves an existing output when extraction verification fails', async () => {
+    const outputDir = '/tmp/ubi-atomic-extract-test';
+    const outputPath = `${outputDir}/game.txt`;
+    await rm(outputDir, { recursive: true, force: true });
+    await mkdir(outputDir, { recursive: true });
+    await writeFile(outputPath, 'known-good');
+
+    const service = new DemuxService(
+      { debugDir: '/tmp', sessionFile: '/tmp/session.json' } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined })
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'ticket',
+            sessionId: 'session',
+            userId: 'user'
+          })
+      } as never,
+      {
+        getDownloadUrlsForRelativePaths: (
+          _session: unknown,
+          _productId: number,
+          relativePaths: string[]
+        ) =>
+          Promise.resolve({
+            responses: relativePaths.map((relativePath) => ({
+              result: 0,
+              relativePath,
+              urls: [`https://example.test/${relativePath}`]
+            }))
+          })
+      } as never,
+      {
+        requestRaw: () =>
+          Promise.resolve({
+            status: 200,
+            body: zstdCompressSync(Buffer.from('bad'))
+          })
+      } as never
+    );
+
+    Object.assign(service as object, {
+      parseLiveManifest: () =>
+        Promise.resolve({
+          download: {
+            game: { title: 'Atomic', demuxProductId: 46 },
+            manifestHash: 'LIVEHASH'
+          },
+          parsed: {
+            chunks: [
+              {
+                files: [
+                  {
+                    name: 'game.txt',
+                    size: 3,
+                    isDir: false,
+                    slices: [
+                      createHash('sha1').update('good').digest('base64')
+                    ],
+                    sliceList: [
+                      {
+                        downloadSha1: Buffer.from(
+                          '1111111111111111111111111111111111111111',
+                          'hex'
+                        ),
+                        fileOffset: 0,
+                        size: 3
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        })
+    });
+
+    await expect(
+      service.extractFile('46', 'game.txt', outputPath)
+    ).rejects.toThrow(/SHA-1/);
+    await expect(readFile(outputPath, 'utf8')).resolves.toBe('known-good');
+    expect(
+      (await readdir(outputDir)).some((entry) => entry.includes('.partial'))
+    ).toBe(false);
   });
 
   it('skips already reconstructed files during full-game resume runs', async () => {

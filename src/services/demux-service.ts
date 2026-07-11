@@ -1,5 +1,13 @@
-import { createHash } from 'node:crypto';
-import { mkdir, open, readFile, stat, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile
+} from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
 import { AuthService } from '../core/auth-service';
@@ -24,7 +32,11 @@ import {
   sliceHexToCandidateRelativePaths,
   sliceTokenToHex
 } from '../util/demux-slices';
-import { normalizeManifestPathForMatch } from '../util/manifest-paths';
+import {
+  ensureSafeManifestOutputParent,
+  normalizeManifestPathForMatch,
+  resolveManifestOutputPath
+} from '../util/manifest-paths';
 import { normalizeForMatch, scoreTitleMatch } from '../util/matching';
 import type { Logger } from '../util/logger';
 import type { ProductService } from './product-service';
@@ -567,14 +579,13 @@ export class DemuxService {
       prepared.download.game.demuxProductId,
       sliceHexHashes
     );
+    const defaultOutputDir = path.join(
+      this.paths.debugDir,
+      'demux-files',
+      `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`
+    );
     const resolvedOutputPath =
-      outputPath ??
-      path.join(
-        this.paths.debugDir,
-        'demux-files',
-        `${prepared.download.game.demuxProductId}_${prepared.download.manifestHash}`,
-        file.name.replaceAll('\\', path.sep)
-      );
+      outputPath ?? resolveManifestOutputPath(defaultOutputDir, file.name);
 
     const transferCache = this.createExtractionCache([file]);
     transferCache.refreshSliceEntry = this.buildRefreshSliceEntryCallback(
@@ -585,7 +596,8 @@ export class DemuxService {
       file,
       resolvedOutputPath,
       responsesByHash,
-      transferCache
+      transferCache,
+      outputPath ? undefined : defaultOutputDir
     );
 
     return {
@@ -638,9 +650,9 @@ export class DemuxService {
       selectedFiles,
       workerCount,
       async (file) => {
-        const resolvedOutputPath = path.join(
+        const resolvedOutputPath = resolveManifestOutputPath(
           resolvedOutputDir,
-          (file.name ?? '(unknown)').replaceAll('\\', path.sep)
+          file.name ?? '(unknown)'
         );
         const skipExisting = file.name
           ? await this.isExistingExtractionComplete(file, resolvedOutputPath)
@@ -689,7 +701,8 @@ export class DemuxService {
           plan.file,
           plan.outputPath,
           responsesByHash,
-          cache
+          cache,
+          resolvedOutputDir
         );
         return {
           manifestPath: plan.file.name,
@@ -820,15 +833,16 @@ export class DemuxService {
         continue;
       }
 
-      const resolvedOutputPath = path.join(
+      const resolvedOutputPath = resolveManifestOutputPath(
         resolvedOutputDir,
-        file.name.replaceAll('\\', path.sep)
+        file.name
       );
       const extracted = await this.extractManifestFileToPath(
         file,
         resolvedOutputPath,
         responsesByHash,
-        cache
+        cache,
+        resolvedOutputDir
       );
       bytesDownloaded += extracted.bytesDownloaded;
       bytesWritten += extracted.bytesWritten;
@@ -1165,7 +1179,8 @@ export class DemuxService {
     file: ParsedManifestFileEntry,
     outputPath: string,
     responsesByHash: Map<string, SliceResponseEntry>,
-    cache: ExtractionCache
+    cache: ExtractionCache,
+    manifestOutputRoot?: string
   ): Promise<{
     sliceCount: number;
     bytesDownloaded: number;
@@ -1182,7 +1197,19 @@ export class DemuxService {
       );
     }
 
-    await mkdir(path.dirname(outputPath), { recursive: true });
+    if (manifestOutputRoot) {
+      await ensureSafeManifestOutputParent(manifestOutputRoot, outputPath);
+    } else {
+      await mkdir(path.dirname(outputPath), { recursive: true });
+    }
+
+    const expectedFileSize = toNumber(file.size);
+    if (!Number.isSafeInteger(expectedFileSize) || expectedFileSize < 0) {
+      throw new UserFacingError(
+        `Manifest file "${file.name}" declared an invalid file size.`
+      );
+    }
+
     let bytesDownloaded = 0;
     let bytesWritten = 0;
     let nextImplicitOffset = 0;
@@ -1195,14 +1222,19 @@ export class DemuxService {
       return {
         sliceCount: file.sliceList.length,
         bytesDownloaded: 0,
-        bytesWritten: toNumber(file.size),
+        bytesWritten: expectedFileSize,
         validatedSliceHashCount: 0
       };
     }
 
-    const handle = await open(outputPath, 'w');
+    const temporaryOutputPath = path.join(
+      path.dirname(outputPath),
+      `.${path.basename(outputPath)}.${randomUUID()}.partial`
+    );
+    let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
-      await handle.truncate(toNumber(file.size));
+      handle = await open(temporaryOutputPath, 'wx', 0o600);
+      await handle.truncate(expectedFileSize);
 
       for (const [index, slice] of file.sliceList.entries()) {
         if (!slice.downloadSha1) {
@@ -1255,6 +1287,16 @@ export class DemuxService {
           : slice.fileOffset !== undefined
             ? toNumber(slice.fileOffset)
             : nextImplicitOffset;
+        if (
+          !Number.isSafeInteger(writeOffset) ||
+          writeOffset < 0 ||
+          writeOffset + decompressedBody.length > expectedFileSize
+        ) {
+          throw new UserFacingError(
+            `Manifest file "${file.name}" declared a slice outside its file bounds.`
+          );
+        }
+
         await handle.write(
           decompressedBody,
           0,
@@ -1265,8 +1307,17 @@ export class DemuxService {
         nextImplicitOffset = writeOffset + decompressedBody.length;
         this.releaseSliceReference(sliceHash, cache);
       }
-    } finally {
+
+      await handle.sync();
       await handle.close();
+      handle = undefined;
+      await rename(temporaryOutputPath, outputPath);
+    } catch (error) {
+      if (handle) {
+        await handle.close();
+      }
+      await rm(temporaryOutputPath, { force: true });
+      throw error;
     }
 
     return {
