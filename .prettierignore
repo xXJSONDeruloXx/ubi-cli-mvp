@@ -1,0 +1,2 @@
+# Ralph loop plans and runtime state are local agent artifacts, not project sources.
+.ralph/
