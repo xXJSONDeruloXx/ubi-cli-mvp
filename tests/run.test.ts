@@ -1,8 +1,9 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Command } from 'commander';
 import { describe, expect, it } from 'vitest';
-import { resolveGameExecutable } from '../src/cli/run';
+import { registerRunCommand, resolveGameExecutable } from '../src/cli/run';
 
 describe('run command executable resolution', () => {
   it('auto-selects a single executable and contains explicit relative paths', async () => {
@@ -29,5 +30,34 @@ describe('run command executable resolution', () => {
     await expect(resolveGameExecutable(root)).rejects.toThrow(
       /Found 2 executable candidates/
     );
+  });
+
+  it('launches with the executable directory as the working directory', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ubi-run-'));
+    const systemDir = path.join(root, 'system');
+    const runner = path.join(root, 'runner');
+    const observedCwd = path.join(root, 'cwd.txt');
+    await mkdir(systemDir);
+    await writeFile(path.join(systemDir, 'game.exe'), 'test');
+    await writeFile(
+      runner,
+      `#!/bin/sh\npwd > ${JSON.stringify(observedCwd)}\n`
+    );
+    await chmod(runner, 0o700);
+
+    const program = new Command();
+    registerRunCommand(program);
+    await program.parseAsync([
+      'node',
+      'ubi',
+      'run',
+      root,
+      '--executable',
+      'system/game.exe',
+      '--runner',
+      runner
+    ]);
+
+    await expect(readFile(observedCwd, 'utf8')).resolves.toBe(`${systemDir}\n`);
   });
 });

@@ -106,7 +106,10 @@ export function registerRunCommand(program: Command): void {
         }
 
         await new Promise<void>((resolve, reject) => {
-          const child = spawn(command, args, { stdio: 'inherit' });
+          const child = spawn(command, args, {
+            cwd: path.dirname(executable),
+            stdio: 'inherit'
+          });
           child.once('error', (error) => {
             reject(
               new UserFacingError(

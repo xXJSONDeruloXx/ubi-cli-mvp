@@ -241,18 +241,18 @@ node dist/index.js download-game 3539 --limit 5 --max-install-bytes 524288000 --
 node dist/index.js download-game 109 --all --yes --output-dir /games/splinter-cell
 ```
 
-Completed files are recorded in a manifest-bound, SHA-256-verified local resume state. Use `--restart` only when deliberately replacing incompatible state.
+Completed files are recorded in a manifest-bound, SHA-256-verified local resume state. Use `--restart` only when deliberately replacing incompatible state. In live validation, an owned 5,320-file / 2.55-GB Splinter Cell tree completed in 5m49s after deterministic CDN-path optimization; a second run SHA-256-verified every output in 14s with zero network transfer.
 
 ### 13. Launch a reconstructed Windows game
 
-On Linux, `run` uses `wine` by default; on Windows it launches the selected executable directly. Start with `--dry-run`; when a tree contains several executables, pass one explicitly.
+On Linux, `run` uses `wine` by default; on Windows it launches the selected executable directly. The child starts in the executable's directory so adjacent DLL/config/asset lookups work. Start with `--dry-run`; when a tree contains several executables, pass one explicitly.
 
 ```bash
 node dist/index.js run /games/splinter-cell --dry-run
-node dist/index.js run /games/splinter-cell --executable System/SplinterCell.exe
+node dist/index.js run /games/splinter-cell --executable system/SplinterCell.exe
 ```
 
-This starts a game process but does not implement Ubisoft Connect/DRM, prefix management, or launcher integration.
+This starts a game process but does not implement Ubisoft Connect/DRM, prefix management, authentication, entitlement registration, or launcher integration. The validated Ubisoft Store build of Splinter Cell loads Uplay API DLLs: a direct Wine run therefore requires a legitimately installed and authenticated Ubisoft Connect client in the same prefix. Do not substitute DLLs or fabricate client registration.
 
 ### 14. Explore associated products / DLC-like entries
 
@@ -297,7 +297,7 @@ The current MVP can also experimentally reconstruct small batches of matching fi
 
 ### `ubi download-game 109 --dry-run`
 
-`download-game` can plan or reconstruct an owned game tree. Its default 10-file / 1-GiB bound, output-path containment checks, free-space preflight, atomic file publication, interrupt handling, and manifest-bound SHA-256 resume state make it suitable for controlled reconstruction runs. It deliberately requires `--all --yes` to opt into a whole manifest.[19]
+`download-game` can plan or reconstruct an owned game tree. Its default 10-file / 1-GiB bound, output-path containment checks, free-space preflight, atomic file publication, interrupt handling, and manifest-bound SHA-256 resume state make it suitable for controlled reconstruction runs. It deliberately requires `--all --yes` to opt into a whole manifest. URL lookup uses each slice hash's deterministic CDN prefix rather than probing all 32 prefixes; a live 5,320-file / 2.55-GB Splinter Cell run completed in 5m49s, and a full verified resume pass took 14s with zero downloaded bytes.[19]
 
 ## Architecture overview
 
@@ -334,8 +334,8 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 3. Live Demux manifest inspection now works for owned products that expose a useful `latestManifest`, but not every entitlement row exposes one.[4][19]
 4. The CLI can now parse live `.manifest`, `.metadata`, and `.licenses` assets, download raw slice blobs, persist raw slice cache entries, and experimentally reconstruct some individual files, small matching file batches, or even a full game tree over multiple runs, but it still does **not** provide a launcher-grade install/update engine.[3][5][19]
 5. Download-service asset and slice exposure still varies by title, entitlement row, compression format, and file path; the current implementation gracefully handles missing live `.metadata`/`.licenses` URLs, but `extract-file`, `extract-files`, and `download-game` remain experimental rather than universally reliable for every manifest path or title.[4][5][19]
-6. Long-running full-game runs can still surface operational rough edges such as signed-URL refresh churn and upstream service instability. The CLI performs bounded preflight by default and supports interrupt-driven cancellation, but it is not a launcher-grade installer or updater.[19]
-7. `ubi run` is a thin Wine/direct-process launcher. It does not configure Wine prefixes, Ubisoft Connect, DRM, controller mappings, or per-game runtime settings.
+6. Long-running full-game runs can still surface upstream service instability or title-specific formats. Deterministic slice paths made the validated 2.55-GB run fit comfortably within the observed signed-URL lifetime, while 403 refresh remains a fallback. The CLI performs bounded preflight by default and supports interrupt-driven cancellation, but it is not a launcher-grade installer or updater.[19]
+7. `ubi run` is a thin Wine/direct-process launcher. It uses the executable directory as the child working directory, but does not configure Wine prefixes, Ubisoft Connect, DRM, controller mappings, or per-game runtime settings. Ubisoft Store builds that depend on Connect still require legitimate desktop-client installation, authentication, and entitlement handling.
 8. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
 
 ## Roadmap

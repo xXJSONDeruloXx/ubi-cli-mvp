@@ -116,26 +116,36 @@ Completed after the breakthrough:
   - `bytesDownloaded: 0`
   - `skippedExistingFiles: 5320`
 - That means repeat whole-tree validation is now dramatically cheaper once the local output tree is already present.
-- The repeated Demux listener warning also appears to have a concrete cause and mitigation now:
+- The repeated Demux listener warning had a concrete cause and mitigation:
   - the upstream `ubisoft-demux` package adds a `connectionData` listener each time `openConnection(...)` is called
-  - `DemuxClient` now reuses a single `download_service` connection instead of opening a new one for every URL lookup
-  - live validation with `slice-urls 109 --limit 5844` completed with empty stderr, which strongly suggests the earlier `MaxListenersExceededWarning` came from repeated download-service connection creation
-- Whole-build reconstruction is still somewhat rough around the edges though: the repo can now reconstruct at least one full older game tree over multiple runs, but it still does not implement a hardened launcher-grade install/update engine.
+  - `DemuxClient` now reuses a single `download_service` connection and one ownership token per product instead of repeating initialization for every URL lookup
+  - live validation with `slice-urls 109 --limit 5844` completed with empty stderr, confirming the earlier `MaxListenersExceededWarning` came from repeated connection creation
+- A larger bottleneck was the inherited 32-prefix slice URL strategy. The CDN prefix is deterministic from `fileHashToPathChar`, so probing 32 candidate paths per hash caused unnecessary control traffic and cascaded 404s:
+  - old strategy: 16 slices / 9.62 MB took 113.6s and encountered 227 failed CDN attempts
+  - deterministic strategy: the same payload took 0.94s at 9.75 MiB/s with 16/16 successes; a separate 64-slice HEAD sample succeeded 64/64
+  - the full Splinter Cell manifest dropped from 187,008 candidate paths to 5,844 deterministic paths and resolved all URLs in 31.5s
+- After that optimization, a resumed full reconstruction completed all 5,320 files / 2,545,474,351 bytes in 349s (5m49s), transferring 2,072,729,411 new bytes with 5,706 network fetches, 36 in-process reuse hits, 134 verified existing files, and zero URL refreshes. The pre-optimization baseline had reached only 138 files / 16.5 MB in 31m32s.
+- A second full pass SHA-256-verified all 5,320 outputs in 14s with zero required slices and zero downloaded bytes.
+- Whole-build reconstruction is still title/build dependent and does not implement a launcher-grade install/update engine.
 
 ### Current blocker frontier
 
-The main remaining blocker is no longer basic Demux connectivity.
+The main remaining blocker is no longer basic Demux connectivity or practical throughput for the validated title.
 
-It is now the gap between **manifest/URL retrieval** and a full **chunk downloader / installer**:
+It is now the gap between **manifest-tree reconstruction** and a registered, client-integrated install:
 
 - some titles do not expose a useful `latestManifest`
 - public/catalog product IDs do not always align 1:1 with Demux ownership IDs
-- current reconstruction is now available for selected files and whole manifest trees, but remains experimental and title/build dependent
-- launcher-grade update, repair, install registration, and game-launch orchestration are still unimplemented
+- reconstruction works for selected files and at least one complete owned manifest, but remains title/build dependent
+- launcher-grade update, repair, install registration, and Ubisoft Connect integration are still unimplemented
+- the Ubisoft Splinter Cell build includes Uplay API loaders; direct Wine correctly failed without a client, while an official Connect install accepted the game API connection but still required interactive desktop-client authentication/entitlement handling
+- the CLI must not fabricate registration, replace Uplay DLLs, or repurpose its authenticated web session to bypass that user/client boundary
 
 ### 2026-07-11 downloader hardening
 
 - `download-game` now defaults to a bounded 10-file / 1-GiB selection and exposes `--dry-run`; full-tree work requires explicit `--all --yes`.
 - Manifest-controlled paths are contained below the requested output root, reject symlink traversal, and publish only after a synced temporary file is atomically renamed.
 - Resume state is bound to the product, manifest hash/body, and output root; it rehashes completed files with SHA-256 instead of trusting size alone.
-- A bounded live Origins tree download and SHA-256-verified zero-network resume succeeded. A whole Splinter Cell tree validation is being run separately.
+- A bounded live Origins tree download and SHA-256-verified zero-network resume succeeded.
+- Deterministic slice paths and reused Demux initialization reduced complete Splinter Cell reconstruction to 5m49s; a subsequent all-file SHA-256 verification completed in 14s with zero network transfer.
+- `run` now starts from the executable directory. Legitimate Wine validation reached the expected Uplay requirement; the official Ubisoft Connect client installed, started, and accepted the game's API connection, leaving interactive client authentication/entitlement as the user boundary.
