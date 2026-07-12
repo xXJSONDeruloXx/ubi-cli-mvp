@@ -250,6 +250,8 @@ export class DemuxClient {
   private authenticatedTicket?: string;
   private ownershipConnection?: DemuxConnectionLike;
   private downloadConnection?: DemuxConnectionLike;
+  private downloadInitializedProductId?: number;
+  private downloadOwnershipTokenExpiresAt?: string;
   private ownershipInitializedSessionId?: string;
   private cachedOwnedGames?: DemuxOwnedGamePayload[];
 
@@ -345,30 +347,10 @@ export class DemuxClient {
     return this.withRetry(
       `getDownloadUrlsForRelativePaths:${productId}`,
       async () => {
-        const token = await this.getOwnershipToken(session, productId);
-        if (!token.token) {
-          throw new Error(
-            `Demux did not return an ownership token for product ${productId}.`
-          );
-        }
-
-        const downloadConnection = await this.getDownloadConnection(session);
-        const initializeResponse = (await downloadConnection.request({
-          request: {
-            requestId: 1,
-            initializeReq: {
-              ownershipToken: token.token,
-              networkId: ''
-            }
-          }
-        })) as DemuxDownloadInitializeResponse;
-
-        if (!initializeResponse.response?.initializeRsp?.ok) {
-          throw new Error(
-            `Demux download service initialization failed for product ${productId}.`
-          );
-        }
-
+        const downloadConnection = await this.initializeDownloadService(
+          session,
+          productId
+        );
         const urlResponse = (await downloadConnection.request({
           request: {
             requestId: 1,
@@ -384,7 +366,7 @@ export class DemuxClient {
         })) as DemuxDownloadUrlResponse;
 
         return {
-          ownershipTokenExpiresAt: token.expiration,
+          ownershipTokenExpiresAt: this.downloadOwnershipTokenExpiresAt,
           responses: normalizeDownloadUrlResponses(
             urlResponse.response?.urlRsp?.urlResponses,
             relativePaths
@@ -424,8 +406,47 @@ export class DemuxClient {
     this.authenticatedTicket = undefined;
     this.ownershipConnection = undefined;
     this.downloadConnection = undefined;
+    this.downloadInitializedProductId = undefined;
+    this.downloadOwnershipTokenExpiresAt = undefined;
     this.ownershipInitializedSessionId = undefined;
     this.cachedOwnedGames = undefined;
+  }
+
+  private async initializeDownloadService(
+    session: StoredSession,
+    productId: number
+  ): Promise<DemuxConnectionLike> {
+    if (this.downloadInitializedProductId === productId) {
+      return this.getDownloadConnection(session);
+    }
+
+    const token = await this.getOwnershipToken(session, productId);
+    if (!token.token) {
+      throw new Error(
+        `Demux did not return an ownership token for product ${productId}.`
+      );
+    }
+
+    const downloadConnection = await this.getDownloadConnection(session);
+    const initializeResponse = (await downloadConnection.request({
+      request: {
+        requestId: 1,
+        initializeReq: {
+          ownershipToken: token.token,
+          networkId: ''
+        }
+      }
+    })) as DemuxDownloadInitializeResponse;
+
+    if (!initializeResponse.response?.initializeRsp?.ok) {
+      throw new Error(
+        `Demux download service initialization failed for product ${productId}.`
+      );
+    }
+
+    this.downloadInitializedProductId = productId;
+    this.downloadOwnershipTokenExpiresAt = token.expiration;
+    return downloadConnection;
   }
 
   private async withRetry<T>(
@@ -552,6 +573,8 @@ export class DemuxClient {
     this.authenticatedTicket = session.ticket;
     this.ownershipConnection = undefined;
     this.downloadConnection = undefined;
+    this.downloadInitializedProductId = undefined;
+    this.downloadOwnershipTokenExpiresAt = undefined;
     this.ownershipInitializedSessionId = undefined;
     this.cachedOwnedGames = undefined;
     this.logger.debug('authenticated demux client', {

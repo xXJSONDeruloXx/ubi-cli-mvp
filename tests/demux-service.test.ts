@@ -1004,8 +1004,10 @@ describe('demux service', () => {
         })
     });
 
+    const progressPhases: string[] = [];
     const result = await service.downloadGame('109', {
-      outputDir: '/tmp/ubi-download-game-test'
+      outputDir: '/tmp/ubi-download-game-test',
+      onProgress: (event) => progressPhases.push(event.phase)
     });
 
     expect(
@@ -1022,6 +1024,15 @@ describe('demux service', () => {
       outputDir: '/tmp/ubi-download-game-test'
     });
     expect(result.notes[0]).toContain('full live manifest file set');
+    expect(progressPhases).toEqual([
+      'preflight',
+      'resume-scan-complete',
+      'url-resolution',
+      'file-start',
+      'file-start',
+      'file-complete',
+      'file-complete'
+    ]);
   });
 
   it('refreshes signed slice URLs after a 403 during extraction', async () => {

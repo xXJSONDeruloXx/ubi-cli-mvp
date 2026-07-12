@@ -29,7 +29,7 @@ import type { ProductConfigSummary } from '../models/product';
 import { UserFacingError } from '../util/errors';
 import {
   collectUniqueSliceHexHashes,
-  sliceHexToCandidateRelativePaths,
+  sliceHexToRelativePath,
   sliceTokenToHex
 } from '../util/demux-slices';
 import {
@@ -139,10 +139,19 @@ interface PreparedLiveManifestExtraction {
 }
 
 export interface DownloadProgressEvent {
-  phase: 'preflight' | 'file-start' | 'file-complete';
+  phase:
+    | 'preflight'
+    | 'resume-scan-complete'
+    | 'url-resolution'
+    | 'file-start'
+    | 'file-complete';
   completedFileCount: number;
   selectedFileCount: number;
   manifestPath?: string;
+  completedBatchCount?: number;
+  totalBatchCount?: number;
+  uniqueSliceCount?: number;
+  elapsedMs?: number;
 }
 
 function toNumber(value: unknown): number {
@@ -399,7 +408,11 @@ export class DemuxService {
   private async resolveSliceUrlResponses(
     session: Awaited<ReturnType<AuthService['ensureValidSession']>>,
     productId: number,
-    sliceHexHashes: string[]
+    sliceHexHashes: string[],
+    onBatchProgress?: (progress: {
+      completedBatchCount: number;
+      totalBatchCount: number;
+    }) => void
   ): Promise<{
     ownershipTokenExpiresAt?: string;
     responsesByHash: Map<
@@ -413,21 +426,26 @@ export class DemuxService {
       urls: string[];
     }>;
     let ownershipTokenExpiresAt: string | undefined;
-
-    for (const candidateChunk of chunkArray(
-      sliceHexHashes.flatMap((hash) => sliceHexToCandidateRelativePaths(hash)),
+    const pathChunks = chunkArray(
+      sliceHexHashes.map((hash) => sliceHexToRelativePath(hash)),
       256
-    )) {
+    );
+
+    for (const [index, pathChunk] of pathChunks.entries()) {
       const result = await this.withSerializedDemuxRequest(() =>
         this.demuxClient.getDownloadUrlsForRelativePaths(
           session,
           productId,
-          candidateChunk
+          pathChunk
         )
       );
       ownershipTokenExpiresAt =
         result.ownershipTokenExpiresAt ?? ownershipTokenExpiresAt;
       responses.push(...result.responses);
+      onBatchProgress?.({
+        completedBatchCount: index + 1,
+        totalBatchCount: pathChunks.length
+      });
     }
 
     const resolved = new Map<
@@ -744,6 +762,7 @@ export class DemuxService {
       };
     }
 
+    const preflightStartedAt = Date.now();
     const state = await DownloadStateStore.open(
       this.paths,
       {
@@ -786,6 +805,12 @@ export class DemuxService {
     );
     const pendingPlans = filePlans.filter((plan) => !plan.skipExisting);
     const skippedPlans = filePlans.filter((plan) => plan.skipExisting);
+    options.onProgress?.({
+      phase: 'resume-scan-complete',
+      completedFileCount: skippedPlans.length,
+      selectedFileCount: selectedFiles.length,
+      elapsedMs: Date.now() - preflightStartedAt
+    });
     await ensureSafeManifestOutputParent(
       resolvedOutputDir,
       path.join(path.resolve(resolvedOutputDir), '.ubi-preflight')
@@ -810,10 +835,22 @@ export class DemuxService {
       pendingPlans.map((plan) => plan.file)
     );
     const session = await this.authService.ensureValidSession();
+    const urlResolutionStartedAt = Date.now();
     const { responsesByHash } = await this.resolveSliceUrlResponses(
       session,
       prepared.download.game.demuxProductId,
-      uniqueSliceHashes
+      uniqueSliceHashes,
+      ({ completedBatchCount, totalBatchCount }) => {
+        options.onProgress?.({
+          phase: 'url-resolution',
+          completedFileCount: skippedPlans.length,
+          selectedFileCount: selectedFiles.length,
+          completedBatchCount,
+          totalBatchCount,
+          uniqueSliceCount: uniqueSliceHashes.length,
+          elapsedMs: Date.now() - urlResolutionStartedAt
+        });
+      }
     );
     const cache = this.createExtractionCache(
       pendingPlans.map((plan) => plan.file)

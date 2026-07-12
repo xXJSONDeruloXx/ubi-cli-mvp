@@ -292,9 +292,10 @@ describe('demux client', () => {
     await client.destroy();
   });
 
-  it('reuses a single download_service connection across repeated URL lookups', async () => {
+  it('reuses one initialized download_service connection across repeated URL lookups', async () => {
     const openConnectionCalls: string[] = [];
     const downloadRequests: unknown[] = [];
+    let ownershipTokenRequestCount = 0;
     const moduleLoader = () =>
       Promise.resolve({
         UbisoftDemux: class {
@@ -349,6 +350,7 @@ describe('demux client', () => {
                     });
                   }
 
+                  ownershipTokenRequestCount += 1;
                   return Promise.resolve({
                     response: {
                       ownershipTokenRsp: {
@@ -427,7 +429,8 @@ describe('demux client', () => {
       'ownership_service',
       'download_service'
     ]);
-    expect(downloadRequests).toHaveLength(4);
+    expect(ownershipTokenRequestCount).toBe(1);
+    expect(downloadRequests).toHaveLength(3);
 
     await client.destroy();
   });

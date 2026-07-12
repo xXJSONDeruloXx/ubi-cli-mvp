@@ -302,6 +302,26 @@ export function registerExtractFileCommand(
                     );
                     return;
                   }
+                  if (event.phase === 'resume-scan-complete') {
+                    process.stderr.write(
+                      `Resume scan: ${event.completedFileCount}/${event.selectedFileCount} file(s) verified in ${((event.elapsedMs ?? 0) / 1000).toFixed(1)}s.\n`
+                    );
+                    return;
+                  }
+                  if (event.phase === 'url-resolution') {
+                    const completed = event.completedBatchCount ?? 0;
+                    const total = event.totalBatchCount ?? 0;
+                    if (
+                      completed === 1 ||
+                      completed === total ||
+                      completed % 10 === 0
+                    ) {
+                      process.stderr.write(
+                        `Signed URL resolution: ${completed}/${total} batch(es), ${event.uniqueSliceCount ?? 0} slice(s), ${((event.elapsedMs ?? 0) / 1000).toFixed(1)}s.\n`
+                      );
+                    }
+                    return;
+                  }
                   if (event.phase === 'file-complete') {
                     process.stderr.write(
                       `[${event.completedFileCount}/${event.selectedFileCount}] ${event.manifestPath ?? '(unknown)'}\n`

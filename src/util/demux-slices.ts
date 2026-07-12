@@ -94,9 +94,12 @@ export function sliceTokenToCandidateRelativePaths(
   return sliceHexToCandidateRelativePaths(sliceTokenToHex(sliceToken));
 }
 
-export function sliceTokenToRelativePath(sliceToken: string | Buffer): string {
-  const hexHash = sliceTokenToHex(sliceToken);
+export function sliceHexToRelativePath(hexHash: string): string {
   return `slices_v3/${fileHashToPathChar(hexHash)}/${hexHash}`;
+}
+
+export function sliceTokenToRelativePath(sliceToken: string | Buffer): string {
+  return sliceHexToRelativePath(sliceTokenToHex(sliceToken));
 }
 
 export function collectUniqueSliceHexHashes(

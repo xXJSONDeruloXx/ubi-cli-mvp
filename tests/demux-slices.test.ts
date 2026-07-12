@@ -3,6 +3,7 @@ import {
   collectUniqueSliceHexHashes,
   collectUniqueSlicePaths,
   sliceHexToCandidateRelativePaths,
+  sliceHexToRelativePath,
   sliceTokenToHex,
   sliceTokenToRelativePath
 } from '../src/util/demux-slices';
@@ -16,6 +17,9 @@ describe('demux slice helpers', () => {
     expect(sliceTokenToRelativePath(sliceToken)).toBe(
       'slices_v3/e/8E5F678ECDBBA7EF59483BABB9A6282196C8A90E'
     );
+    expect(
+      sliceHexToRelativePath('8E5F678ECDBBA7EF59483BABB9A6282196C8A90E')
+    ).toBe('slices_v3/e/8E5F678ECDBBA7EF59483BABB9A6282196C8A90E');
   });
 
   it('collects unique slice paths from a parsed manifest shape', () => {
