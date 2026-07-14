@@ -61,6 +61,20 @@ Exit criteria:
 - [x] Update README with validated scope/limits
 - [ ] Create MVP tag/release if validation supports it
 
+### Milestone 6: guarded desktop-client integration
+
+Exit criteria:
+
+- [x] Bootstrap a pinned official Connect client in an explicit Wine prefix
+- [x] Keep first authentication/MFA inside the official client
+- [x] Seed a paused official download without writing client registry/state/manifest metadata
+- [x] Return final verification/finalization to Connect
+- [x] Launch a registered product through the official `uplay://` handler
+- [ ] Persist non-secret product/prefix/install profiles for a concise `ubi play <query>` workflow
+- [ ] Determine whether a supported URI/API can initiate a first official download without GUI clicks
+- [ ] Add a guarded wait/orchestration mode around client-owned staging creation
+- [ ] Validate the bridge on another owned title/build before treating it as general
+
 ## Progress log
 
 - 2026-03-23: Initialized local git repository.
@@ -89,3 +103,5 @@ Exit criteria:
 - 2026-03-24: Reused a single Demux `download_service` connection across repeated URL lookups, added regression coverage for that behavior, and live-validated a full 5844-slice Splinter Cell URL-resolution run without the earlier listener warning.
 - 2026-07-11: Hardened session persistence and redacted login JSON secrets; added manifest-path containment, symlink-resistant output parents, atomic extraction publication, manifest-bound SHA-256 resume state, disk preflight, bounded/dry-run game selection, cancellation, and progress reporting. Whole-manifest downloads now require explicit `--all --yes`.
 - 2026-07-11: Replaced 32-prefix CDN probing with deterministic hash-derived paths and reused per-product Demux initialization. A resumed 5,320-file / 2.55-GB Splinter Cell reconstruction completed in 5m49s, followed by a 14-second zero-network SHA-256 verification. Updated `run` to use the executable directory as cwd; legitimate Wine/Ubisoft Connect testing confirmed that client authentication and entitlement remain an external user boundary.
+- 2026-07-12: Added guided Connect launch support with explicit Wine prefixes, repeatable runner arguments, pinned official installer download/offline reuse, exact SHA-256 and PE certificate-table checks, and explicit install consent. Live-tested fresh-prefix installation and authenticated product-id 109 startup without transferring credentials.
+- 2026-07-13: Added guarded `connect-seed` bridging for a paused official download. Live product-109 validation seeded 2,237 mismatched files / 2.52 GB in 22s, after which Connect finalized instantly and all 5,320 installed payload hashes matched the CLI source. Both official Play and `uplay://launch/109/0` ran the game successfully. Remaining manual steps are first Connect authentication/MFA and one official Download initiation to create client-owned staging metadata.

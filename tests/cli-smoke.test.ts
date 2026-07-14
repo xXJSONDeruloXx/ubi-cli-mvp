@@ -43,6 +43,7 @@ describe('cli smoke test', () => {
     expect(stdout).toContain('extract-files');
     expect(stdout).toContain('download-game');
     expect(stdout).toContain('run');
+    expect(stdout).toContain('connect-seed');
   }, 120_000);
 
   it('advertises bounded full-game download safeguards', async () => {
@@ -58,5 +59,28 @@ describe('cli smoke test', () => {
     expect(stdout).toContain('--yes');
     expect(stdout).toContain('--dry-run');
     expect(stdout).toContain('--restart');
+  }, 120_000);
+
+  it('advertises the explicit guided Connect safeguards', async () => {
+    const stdout = await run('node', ['dist/index.js', 'run', '--help']);
+
+    expect(stdout).toContain('--wine-prefix');
+    expect(stdout).toContain('--connect');
+    expect(stdout).toContain('--ensure-connect');
+    expect(stdout).toContain('--connect-installer');
+    expect(stdout).toContain('--connect-ready');
+    expect(stdout).toContain('--connect-product-id');
+    expect(stdout).toContain('--yes');
+
+    const seedHelp = await run('node', [
+      'dist/index.js',
+      'connect-seed',
+      '--help'
+    ]);
+    expect(seedHelp).toContain('--product-id');
+    expect(seedHelp).toContain('--dry-run');
+    expect(seedHelp).toContain('--yes');
+    expect(seedHelp).toContain('--finalize');
+    expect(seedHelp).toContain('--launch');
   }, 120_000);
 });

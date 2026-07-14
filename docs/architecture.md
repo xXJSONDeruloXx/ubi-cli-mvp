@@ -51,6 +51,8 @@ Current modules:
 - `addon-service.ts`: expose public associated products from the catalog graph for DLC exploration, without claiming ownership.[12][19]
 - `manifest-service.ts`: fetch/parse manifests from public fixtures by default and from live Demux/download-service URLs when requested, deriving dry-run file/size summaries from either source.[3][5][13][17][18][19]
 - `public-catalog-service.ts`: fetch/cache `UplayManifests` datasets and build searchable config/title indexes.[11][12][13][14][15]
+- `ubisoft-connect.ts`: validate/cache the pinned official client installer, prepare explicit user-owned Wine prefixes, discover/start Connect, and run Wine-compatible child processes.
+- `connect-seed.ts`: discover client-owned paused-download staging, enforce process/path/symlink safeguards, hash-compare reconstructed payloads, and atomically seed only mismatched staged files without modifying Connect metadata.
 
 ### `src/models/`
 
@@ -160,11 +162,30 @@ Current modules include:
 ### `ubi download-game <query>`
 
 1. Parse the live owned manifest.
-2. Select the full manifest file set.
-3. Resolve signed URLs for all referenced slices.
-4. Reuse cached raw slices when available; otherwise fetch them and add them to the local cache.
-5. Reconstruct the full manifest tree into a local output directory.
-6. Stop short of claiming full installer/update-engine support, because long runs may still need signed-URL refresh/retry orchestration.
+2. Select a bounded file set by default; require explicit `--all --yes` for the full manifest.
+3. SHA-256-verify resume-state entries before deciding which files still need slices.
+4. Derive one deterministic CDN path per needed slice and resolve signed URLs through reused per-product Demux initialization.
+5. Fetch/decompress slices and publish contained output files through synced atomic renames.
+6. Persist manifest-bound SHA-256 resume metadata and retain signed-URL refresh as a fallback.
+
+### `ubi connect-seed <install-directory>`
+
+1. Require an explicit Wine prefix and numeric Connect product ID.
+2. Confirm `upc.exe` is not running and read the product install path registered by the official client.
+3. Require Connect-created `uplay_install.state` and `uplay_download/<productId>` staging markers; never create or edit them.
+4. Reject source symlinks and destination traversal/symlink paths.
+5. SHA-256-compare every reconstructed source file with its staged counterpart.
+6. In `--dry-run`, report matching and mismatched files/bytes without writing.
+7. With explicit `--yes`, copy only mismatches through synced atomic temporary-file renames.
+8. With `--finalize`, restart Connect and wait until its official install manifest exists and product staging is removed; with `--launch`, then invoke the registered product URI.
+9. Keep authoritative verification, finalization, entitlement, and DRM handling inside Connect.
+
+### Guided Connect launch
+
+1. Require an explicit Wine prefix so the default prefix is never modified unexpectedly.
+2. Discover Connect or, with `--ensure-connect --yes`, download the exact pinned installer from its constrained official HTTPS endpoint and validate SHA-256 plus PE certificate-table structure before execution.
+3. Keep first credential/MFA entry in the official client UI; never transfer the CLI web session.
+4. After official install finalization, invoke `uplay://launch/<productId>/0` when `--connect-product-id` is supplied, allowing Connect to perform its normal launch/entitlement path without a Play-button click.
 
 ### Public/fallback manifest path
 
@@ -213,5 +234,6 @@ The remaining frontier is the gap between **raw manifest/slice retrieval** and a
 
 - public/catalog product IDs do not always align 1:1 with Demux ownership product IDs
 - not every entitlement row exposes a usable `latestManifest`
-- individual file reconstruction is now possible for at least some files, but whole-install reconstruction/install-state handling is not yet implemented
-- update/resume/repair orchestration remains out of scope until slice availability and assembly semantics are better understood across more titles and multi-slice files
+- complete reconstruction plus Connect staging/finalization is validated for one owned legacy title/build, but other titles may use different payload, staging, prerequisite, or registration semantics
+- first-time Connect authentication/MFA and one official Download initiation remain interactive because no supported unattended credential or install-initiation API has been established
+- update/repair orchestration and automatic product-ID/profile selection remain incomplete

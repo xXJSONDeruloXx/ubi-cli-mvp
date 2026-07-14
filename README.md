@@ -56,6 +56,8 @@ Implemented or partially implemented commands:
 - `ubi extract-file <query> <manifest-path>`
 - `ubi extract-files <query> <path-filter>`
 - `ubi download-game <query>`
+- `ubi run <install-directory>`
+- `ubi connect-seed <install-directory>`
 - `ubi addons <title-or-id>`
 - `ubi doctor`
 - `ubi config show`
@@ -241,7 +243,7 @@ node dist/index.js download-game 3539 --limit 5 --max-install-bytes 524288000 --
 node dist/index.js download-game 109 --all --yes --output-dir /games/splinter-cell
 ```
 
-Completed files are recorded in a manifest-bound, SHA-256-verified local resume state. Use `--restart` only when deliberately replacing incompatible state. In live validation, an owned 5,320-file / 2.55-GB Splinter Cell tree completed in 5m49s after deterministic CDN-path optimization; a second run SHA-256-verified every output in 14s with zero network transfer.
+Completed files are recorded in a manifest-bound, SHA-256-verified local resume state. Use `--restart` only when deliberately replacing incompatible state. In live validation, an owned 5,320-file / 2.55-GB Splinter Cell tree first completed in 5m49s after deterministic CDN-path optimization. A later clean-cache run completed in 2m55s with 5,844 network fetches, zero cache hits, and zero URL refreshes; a second pass SHA-256-verified every output in 10s with zero network transfer.
 
 ### 13. Launch a reconstructed Windows game
 
@@ -252,7 +254,36 @@ node dist/index.js run /games/splinter-cell --dry-run
 node dist/index.js run /games/splinter-cell --executable system/SplinterCell.exe
 ```
 
-This starts a game process but does not implement Ubisoft Connect/DRM, prefix management, authentication, entitlement registration, or launcher integration. The validated Ubisoft Store build of Splinter Cell loads Uplay API DLLs: a direct Wine run therefore requires a legitimately installed and authenticated Ubisoft Connect client in the same prefix. Do not substitute DLLs or fabricate client registration.
+For Ubisoft Store builds that require the desktop client, use an explicit prefix. `--connect` starts the official client and pauses for the user to complete its first authentication. `--ensure-connect --yes` may download and silently install a pinned official installer; `--connect-installer` accepts the same pinned file for offline reuse. The CLI verifies the exact SHA-256 and PE Authenticode certificate-table structure before execution.
+
+```bash
+node dist/index.js run /games/splinter-cell \
+  --executable system/SplinterCell.exe \
+  --wine-prefix ~/.local/share/ubi/prefixes/splinter-cell \
+  --ensure-connect --yes
+```
+
+Connect did not expose a reliable **Locate installed game** path for the validated legacy build. Instead, start its official Download once, wait until transfer begins, pause it, and fully exit Connect. `connect-seed` then discovers the product registration created by Connect, refuses to run while the client is active, validates the official staging markers, SHA-256-compares every payload file, and atomically seeds only mismatches. It never changes Connect's registry, state, or manifest files.
+
+```bash
+node dist/index.js connect-seed /games/splinter-cell \
+  --wine-prefix ~/.local/share/ubi/prefixes/splinter-cell \
+  --product-id 109 --dry-run
+node dist/index.js connect-seed /games/splinter-cell \
+  --wine-prefix ~/.local/share/ubi/prefixes/splinter-cell \
+  --product-id 109 --yes --finalize
+```
+
+`--finalize` restarts Connect and waits for its official verification to publish `uplay_install.manifest` and remove product staging; the validated client resumed automatically. Add `--launch` to invoke the registered game URI immediately after successful finalization. Once Connect shows **Play**, future launches can avoid the Play button by using the same registered `uplay://` protocol:
+
+```bash
+node dist/index.js run /games/splinter-cell \
+  --executable system/SplinterCell.exe \
+  --wine-prefix ~/.local/share/ubi/prefixes/splinter-cell \
+  --connect --connect-ready --connect-product-id 109
+```
+
+Credential entry, MFA, entitlement, initial download-state creation, and final verification remain inside Ubisoft Connect. The CLI never transfers its web session, submits desktop credentials, substitutes DLLs, or fabricates Connect registry/database state. `--runner-arg` is repeatable for runners that need arguments before the executable.
 
 ### 14. Explore associated products / DLC-like entries
 
@@ -335,7 +366,7 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 4. The CLI can now parse live `.manifest`, `.metadata`, and `.licenses` assets, download raw slice blobs, persist raw slice cache entries, and experimentally reconstruct some individual files, small matching file batches, or even a full game tree over multiple runs, but it still does **not** provide a launcher-grade install/update engine.[3][5][19]
 5. Download-service asset and slice exposure still varies by title, entitlement row, compression format, and file path; the current implementation gracefully handles missing live `.metadata`/`.licenses` URLs, but `extract-file`, `extract-files`, and `download-game` remain experimental rather than universally reliable for every manifest path or title.[4][5][19]
 6. Long-running full-game runs can still surface upstream service instability or title-specific formats. Deterministic slice paths made the validated 2.55-GB run fit comfortably within the observed signed-URL lifetime, while 403 refresh remains a fallback. The CLI performs bounded preflight by default and supports interrupt-driven cancellation, but it is not a launcher-grade installer or updater.[19]
-7. `ubi run` is a thin Wine/direct-process launcher. It uses the executable directory as the child working directory, but does not configure Wine prefixes, Ubisoft Connect, DRM, controller mappings, or per-game runtime settings. Ubisoft Store builds that depend on Connect still require legitimate desktop-client installation, authentication, and entitlement handling.
+7. `ubi run` can bootstrap/start a pinned official Ubisoft Connect build and launch an installed product through the registered `uplay://` protocol; `connect-seed` can populate a paused official download without modifying client state. First client authentication/MFA, initial official download-state creation, and final Connect verification remain interactive. Controller mappings and per-game runtime settings are also out of scope.
 8. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
 
 ## Roadmap
