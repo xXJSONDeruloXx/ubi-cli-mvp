@@ -14,6 +14,7 @@ import {
   runProcess,
   UBISOFT_CONNECT_INSTALLER_SHA256
 } from '../services/ubisoft-connect';
+import { sanitizedChildEnvironment } from '../util/child-env';
 import { UserFacingError } from '../util/errors';
 import { resolveManifestOutputPath } from '../util/manifest-paths';
 
@@ -378,7 +379,7 @@ export function registerRunCommand(program: Command): void {
             command: executable,
             args,
             cwd: path.dirname(executable),
-            env: process.env
+            env: sanitizedChildEnvironment()
           };
       await runProcess(gameSpec, 'Game process');
     });

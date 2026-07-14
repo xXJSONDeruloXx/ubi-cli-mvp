@@ -6,7 +6,7 @@ import { ensureAppDirs, getAppPaths } from '../core/config';
 import {
   loadConnectProfiles,
   resolveProfileWinePrefix,
-  saveConnectProfiles,
+  updateConnectProfiles,
   type ConnectGameProfile
 } from '../services/connect-profiles';
 import {
@@ -68,9 +68,10 @@ export function registerConnectProfileCommands(program: Command): void {
       const paths = getAppPaths();
       await ensureAppDirs(paths);
       const storePath = profileStorePath();
-      const store = await loadConnectProfiles(storePath);
-      store.defaultWinePrefix = await validateExistingPrefix(winePrefix);
-      await saveConnectProfiles(storePath, store);
+      const validatedPrefix = await validateExistingPrefix(winePrefix);
+      const store = await updateConnectProfiles(storePath, (current) => {
+        current.defaultWinePrefix = validatedPrefix;
+      });
       process.stdout.write(`defaultWinePrefix: ${store.defaultWinePrefix}\n`);
     });
 
@@ -122,7 +123,6 @@ export function registerConnectProfileCommands(program: Command): void {
         const paths = getAppPaths();
         await ensureAppDirs(paths);
         const storePath = profileStorePath();
-        const store = await loadConnectProfiles(storePath);
         const profile: ConnectGameProfile = {
           productId,
           installDir,
@@ -133,8 +133,9 @@ export function registerConnectProfileCommands(program: Command): void {
             : {}),
           ...(options.executable ? { executable: options.executable } : {})
         };
-        store.games[productId] = profile;
-        await saveConnectProfiles(storePath, store);
+        const store = await updateConnectProfiles(storePath, (current) => {
+          current.games[productId] = profile;
+        });
         process.stdout.write(
           [
             `productId: ${productId}`,
@@ -154,14 +155,14 @@ export function registerConnectProfileCommands(program: Command): void {
       const paths = getAppPaths();
       await ensureAppDirs(paths);
       const storePath = profileStorePath();
-      const store = await loadConnectProfiles(storePath);
-      if (!store.games[productId]) {
-        throw new UserFacingError(
-          `No Connect profile exists for product ${productId}.`
-        );
-      }
-      delete store.games[productId];
-      await saveConnectProfiles(storePath, store);
+      await updateConnectProfiles(storePath, (store) => {
+        if (!store.games[productId]) {
+          throw new UserFacingError(
+            `No Connect profile exists for product ${productId}.`
+          );
+        }
+        delete store.games[productId];
+      });
       process.stdout.write(`removedProductId: ${productId}\n`);
     });
 

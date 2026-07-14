@@ -1,3 +1,6 @@
+import { mkdtemp, mkdir, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { execa } from 'execa';
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -30,6 +33,7 @@ describe('cli smoke test', () => {
   it('shows newly registered exploratory commands in help output', async () => {
     const stdout = await run('node', ['dist/index.js', '--help']);
 
+    expect(stdout).toContain('setup');
     expect(stdout).toContain('addons');
     expect(stdout).toContain('files');
     expect(stdout).toContain('download-plan');
@@ -50,6 +54,81 @@ describe('cli smoke test', () => {
     expect(stdout).toContain('connect-seed');
   }, 120_000);
 
+  it('emits parseable offline setup JSON and a strict incomplete exit', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ubi-setup-check-'));
+    const result = await execa(
+      'node',
+      ['dist/index.js', 'setup', '--check', '--strict', '--json'],
+      {
+        reject: false,
+        env: {
+          ...process.env,
+          XDG_DATA_HOME: path.join(root, 'data'),
+          XDG_CONFIG_HOME: path.join(root, 'config'),
+          XDG_CACHE_HOME: path.join(root, 'cache'),
+          XDG_STATE_HOME: path.join(root, 'state')
+        }
+      }
+    );
+    expect(result.exitCode).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      setupStatus: 'needs-cli-login',
+      cliSession: 'missing',
+      clientInstalled: false,
+      connectStarted: false
+    });
+
+    const login = await execa('node', ['dist/index.js', 'login', '--json'], {
+      reject: false,
+      env: {
+        ...process.env,
+        XDG_DATA_HOME: path.join(root, 'login-data'),
+        XDG_CONFIG_HOME: path.join(root, 'login-config'),
+        XDG_CACHE_HOME: path.join(root, 'login-cache'),
+        XDG_STATE_HOME: path.join(root, 'login-state'),
+        UBI_EMAIL: '',
+        UBI_PASSWORD: '',
+        UBI_2FA_CODE: ''
+      }
+    });
+    expect(login.exitCode).toBe(1);
+    expect(login.stdout).toBe('');
+    expect(login.stderr).toContain('Noninteractive login requires');
+
+    const realPrefixParent = path.join(root, 'real-prefix-parent');
+    const linkedPrefixParent = path.join(root, 'linked-prefix-parent');
+    await mkdir(realPrefixParent);
+    await symlink(realPrefixParent, linkedPrefixParent);
+    const unsafeSetup = await execa(
+      'node',
+      [
+        'dist/index.js',
+        'setup',
+        '--wine-prefix',
+        path.join(linkedPrefixParent, 'prefix'),
+        '--json'
+      ],
+      {
+        reject: false,
+        env: {
+          ...process.env,
+          XDG_DATA_HOME: path.join(root, 'unsafe-data'),
+          XDG_CONFIG_HOME: path.join(root, 'unsafe-config'),
+          XDG_CACHE_HOME: path.join(root, 'unsafe-cache'),
+          XDG_STATE_HOME: path.join(root, 'unsafe-state'),
+          UBI_EMAIL: '',
+          UBI_PASSWORD: '',
+          UBI_2FA_CODE: ''
+        }
+      }
+    );
+    expect(unsafeSetup.exitCode).toBe(1);
+    expect(unsafeSetup.stderr).toContain(
+      'Refusing unsafe, non-owner-only, or unrecognized Wine prefix before authentication'
+    );
+    expect(unsafeSetup.stderr).not.toContain('Noninteractive login requires');
+  }, 120_000);
+
   it('advertises bounded full-game download safeguards', async () => {
     const stdout = await run('node', [
       'dist/index.js',
@@ -66,6 +145,14 @@ describe('cli smoke test', () => {
   }, 120_000);
 
   it('advertises the explicit guided Connect safeguards', async () => {
+    const setupHelp = await run('node', ['dist/index.js', 'setup', '--help']);
+    expect(setupHelp).toContain('--check');
+    expect(setupHelp).toContain('--strict');
+    expect(setupHelp).toContain('--no-launch-connect');
+    expect(setupHelp).toContain('--allow-connect-launch');
+    expect(setupHelp).toContain('--trust-existing-connect');
+    expect(setupHelp).toContain('--yes');
+
     const stdout = await run('node', ['dist/index.js', 'run', '--help']);
 
     expect(stdout).toContain('--wine-prefix');

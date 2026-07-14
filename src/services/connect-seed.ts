@@ -16,6 +16,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import { sanitizedChildEnvironment } from '../util/child-env';
 import { UserFacingError } from '../util/errors';
 import {
   ensureSafeManifestOutputParent,
@@ -160,11 +161,10 @@ export async function discoverConnectSeedPlan(
       `Wine prefix must be an existing, user-owned real directory: ${resolvedPrefix}`
     );
   }
-  const environment = {
-    ...process.env,
+  const environment = sanitizedChildEnvironment({
     WINEPREFIX: resolvedPrefix,
     WINEDEBUG: '-all'
-  };
+  });
 
   let taskList: { stdout: string };
   try {

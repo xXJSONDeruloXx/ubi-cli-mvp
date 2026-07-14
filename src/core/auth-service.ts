@@ -3,6 +3,7 @@ import {
   clearSession,
   loadSession,
   saveSession,
+  withSessionLock,
   type StoredSession
 } from './session-store';
 import type { AppPaths, RuntimeConfig } from '../models/config';
@@ -68,6 +69,15 @@ export class AuthService {
     email: string,
     password: string
   ): Promise<LoginResult> {
+    return withSessionLock(this.paths, () =>
+      this.loginWithPasswordUnlocked(email, password)
+    );
+  }
+
+  private async loginWithPasswordUnlocked(
+    email: string,
+    password: string
+  ): Promise<LoginResult> {
     const credentials = Buffer.from(`${email}:${password}`).toString('base64');
     const initialHeaders = {
       ...this.getCommonHeaders(),
@@ -113,6 +123,16 @@ export class AuthService {
     code: string,
     email?: string
   ): Promise<LoginSuccessResult> {
+    return withSessionLock(this.paths, () =>
+      this.completeTwoFactorUnlocked(twoFactorTicket, code, email)
+    );
+  }
+
+  private async completeTwoFactorUnlocked(
+    twoFactorTicket: string,
+    code: string,
+    email?: string
+  ): Promise<LoginSuccessResult> {
     const response = await this.httpClient.requestJson<SessionApiResponse>(
       `${SERVICES_BASE_URL}/v3/profiles/sessions`,
       {
@@ -137,7 +157,7 @@ export class AuthService {
   }
 
   public async logout(): Promise<void> {
-    await clearSession(this.paths);
+    await withSessionLock(this.paths, () => clearSession(this.paths));
   }
 
   public async getStoredSession(): Promise<StoredSession | null> {
@@ -145,6 +165,10 @@ export class AuthService {
   }
 
   public async ensureValidSession(): Promise<StoredSession> {
+    return withSessionLock(this.paths, () => this.ensureValidSessionUnlocked());
+  }
+
+  private async ensureValidSessionUnlocked(): Promise<StoredSession> {
     const session = await loadSession(this.paths);
     if (!session) {
       throw new UserFacingError(

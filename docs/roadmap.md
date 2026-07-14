@@ -66,6 +66,8 @@ Exit criteria:
 Exit criteria:
 
 - [x] Bootstrap a pinned official Connect client in an explicit Wine prefix
+- [x] Add `ubi setup` to reuse/create CLI auth, configure one owner-only shared prefix, install the verified client with explicit consent, and save the default profile
+- [x] Add `ubi setup --check` to report offline remembered-auth evidence without launching Connect
 - [x] Keep first-ever authentication/MFA inside the official client; never convert or inject the CLI session
 - [x] Seed a paused official download without writing client registry/state/manifest metadata
 - [x] Return final verification/finalization to Connect
@@ -113,3 +115,4 @@ Exit criteria:
 - 2026-07-13: Confirmed `uplay://install/82` opens the official Assassin's Creed language/install confirmation directly. Added `connect-install` to remove library navigation while intentionally leaving authentication and confirmation dialogs to Connect.
 - 2026-07-13: Isolated remembered desktop authentication: secure-storage files or complete AppData alone failed in a clean prefix, while opaque Connect AppData plus the matching Wine `MachineGuid` regenerated ownership without login and copied no game registration. Added guarded `connect-prefix migrate-auth`; migration remains one-way because token refresh can retire the source.
 - 2026-07-13: Repeated the product-109 bridge from a genuinely fresh authenticated/unregistered prefix. Official prompts created staging; 157 files already matched, 5,163 files / 2,528,843,854 bytes were seeded, Connect finalized, all 5,320 final hashes matched, and profiled launch/lifecycle cleanup passed. This confirms the bridge but also confirms registration is not immediate: official per-product initialization remains required. Copy-on-write publication then reduced a controlled full 5,320-file / 2.55-GB same-filesystem seed benchmark to 6.3s plus 5.8s hash verification.
+- 2026-07-14: Added `ubi setup` as the one-time entry point for CLI-session reuse/login, safe shared-prefix creation, consent-gated verified Connect installation, default-profile persistence, and conditional official-client launch. `setup --check` was live-validated against the canonical prefix as `locally-ready` with remembered auth present and zero Wine processes. A disposable isolated-data run also created a fresh prefix, installed the verified client, persisted the default, emitted clean JSON, and correctly reported `needs-connect-auth` without launching Connect; all remembered-auth checks remain explicitly offline evidence.

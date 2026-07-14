@@ -22,6 +22,7 @@ import { registerListCommand } from './cli/list';
 import { registerManifestCommand } from './cli/manifest';
 import { registerRunCommand } from './cli/run';
 import { registerSearchCommand } from './cli/search';
+import { registerSetupCommand } from './cli/setup';
 import { registerSliceUrlsCommand } from './cli/slice-urls';
 import { UserFacingError } from './util/errors';
 
@@ -39,6 +40,7 @@ async function main(): Promise<void> {
     createCliContext(program.opts<{ verbose?: boolean; quiet?: boolean }>());
 
   registerAuthCommands(program, makeContext);
+  registerSetupCommand(program, makeContext);
   registerListCommand(program, makeContext);
   registerDemuxListCommand(program, makeContext);
   registerSearchCommand(program, makeContext);

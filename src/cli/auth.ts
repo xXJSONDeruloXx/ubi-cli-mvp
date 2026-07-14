@@ -2,7 +2,7 @@ import process from 'node:process';
 import prompts from 'prompts';
 import type { Command } from 'commander';
 import { AuthService } from '../core/auth-service';
-import { redactSession } from '../core/session-store';
+import { redactSession, type StoredSession } from '../core/session-store';
 import type { AccountIdentity } from '../models/account';
 import { UserFacingError } from '../util/errors';
 import type { CliContext } from './context';
@@ -68,6 +68,74 @@ async function promptForTwoFactorCode(): Promise<string> {
   return code.trim();
 }
 
+export interface CliLoginOptions {
+  email?: string;
+  passwordStdin?: boolean;
+  nonInteractive?: boolean;
+}
+
+async function readPasswordFromStdin(): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    process.stdin.on('data', (chunk) => {
+      const buffer = Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > 64 * 1024) {
+        process.stdin.pause();
+        reject(new UserFacingError('Password input is unexpectedly large.'));
+        return;
+      }
+      chunks.push(buffer);
+    });
+    process.stdin.on('end', () => {
+      const value = Buffer.concat(chunks).toString('utf8');
+      resolve(value.replace(/\r?\n$/, ''));
+    });
+    process.stdin.on('error', reject);
+  });
+}
+
+export async function performCliLogin(
+  context: CliContext,
+  options: CliLoginOptions = {}
+): Promise<StoredSession> {
+  const auth = new AuthService(
+    context.paths,
+    context.config,
+    context.logger.child('auth')
+  );
+  let email = options.email ?? process.env.UBI_EMAIL;
+  let password = process.env.UBI_PASSWORD;
+
+  if (options.passwordStdin) {
+    password = await readPasswordFromStdin();
+  }
+  if (!email || !password) {
+    if (options.nonInteractive) {
+      throw new UserFacingError(
+        'Noninteractive login requires --email plus --password-stdin or UBI_EMAIL/UBI_PASSWORD.'
+      );
+    }
+    const prompted = await promptForCredentials(email);
+    email = prompted.email;
+    password = prompted.password;
+  }
+
+  const login = await auth.loginWithPassword(email, password);
+  if (login.kind === '2fa-required') {
+    if (!process.env.UBI_2FA_CODE && options.nonInteractive) {
+      throw new UserFacingError(
+        'Noninteractive login requires UBI_2FA_CODE when Ubisoft requests MFA.'
+      );
+    }
+    const code = process.env.UBI_2FA_CODE ?? (await promptForTwoFactorCode());
+    const completed = await auth.completeTwoFactor(login.ticket, code, email);
+    return completed.session;
+  }
+  return login.session;
+}
+
 function emitIdentity(identity: AccountIdentity, asJson?: boolean): void {
   if (asJson) {
     process.stdout.write(`${JSON.stringify(identity, null, 2)}\n`);
@@ -102,67 +170,22 @@ export function registerAuthCommands(
         json?: boolean;
       }) => {
         const context = await makeContext();
-        const auth = new AuthService(
-          context.paths,
-          context.config,
-          context.logger.child('auth')
-        );
-
-        let email = options.email ?? process.env.UBI_EMAIL;
-        let password = process.env.UBI_PASSWORD;
-
-        if (options.passwordStdin) {
-          password = await new Promise<string>((resolve, reject) => {
-            const chunks: Buffer[] = [];
-            process.stdin.on('data', (chunk) =>
-              chunks.push(Buffer.from(chunk))
-            );
-            process.stdin.on('end', () =>
-              resolve(Buffer.concat(chunks).toString('utf8').trim())
-            );
-            process.stdin.on('error', reject);
-          });
-        }
-
-        if (!email || !password) {
-          const prompted = await promptForCredentials(email);
-          email = prompted.email;
-          password = prompted.password;
-        }
-
-        const login = await auth.loginWithPassword(email, password);
-
-        if (login.kind === '2fa-required') {
-          const code =
-            process.env.UBI_2FA_CODE ?? (await promptForTwoFactorCode());
-          const completed = await auth.completeTwoFactor(
-            login.ticket,
-            code,
-            email
-          );
-
-          if (options.json) {
-            process.stdout.write(
-              `${JSON.stringify(redactSession(completed.session), null, 2)}\n`
-            );
-            return;
-          }
-
-          process.stdout.write(
-            `Logged in as ${completed.session.nameOnPlatform ?? completed.session.userId}.\n`
-          );
-          return;
-        }
+        const session = await performCliLogin(context, {
+          email: options.email,
+          passwordStdin: options.passwordStdin,
+          nonInteractive:
+            options.json || !process.stdin.isTTY || !process.stdout.isTTY
+        });
 
         if (options.json) {
           process.stdout.write(
-            `${JSON.stringify(redactSession(login.session), null, 2)}\n`
+            `${JSON.stringify(redactSession(session), null, 2)}\n`
           );
           return;
         }
 
         process.stdout.write(
-          `Logged in as ${login.session.nameOnPlatform ?? login.session.userId}.\n`
+          `Logged in as ${session.nameOnPlatform ?? session.userId}.\n`
         );
       }
     );

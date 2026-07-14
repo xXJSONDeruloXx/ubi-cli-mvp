@@ -39,6 +39,7 @@ That makes this project difficult for three reasons:
 
 Implemented or partially implemented commands:
 
+- `ubi setup`
 - `ubi login`
 - `ubi logout`
 - `ubi me`
@@ -81,6 +82,7 @@ Current command strategy:
 
 High-level status:
 
+- setup/check: **validated live against an installed authenticated shared prefix without launching Connect**[19]
 - login/logout/me: **validated live**[19]
 - list/search: **validated live/public-catalog mix**[19]
 - info: **validated live/public-dataset mix**[19]
@@ -96,6 +98,7 @@ See `docs/validation.md` for exact commands, outcomes, and caveats.[19]
 
 ### Done
 
+- [x] one-command shared-prefix/client setup plus offline remembered-auth inspection
 - [x] direct Ubisoft session login, refresh, logout, and `me`
 - [x] live library listing and title/product search
 - [x] public-catalog and product-config enrichment
@@ -134,6 +137,7 @@ Requirements:
 
 - Node.js 22+
 - npm 11+
+- a Wine-compatible runner for `setup`, Connect integration, and Windows game launch
 
 Install:
 
@@ -146,7 +150,25 @@ Optional local `.env` support is built in via `dotenv`. The repo ignores `.env`,
 
 ## Quickstart
 
-### 1. Log in
+### Recommended: one-time setup
+
+```bash
+node dist/index.js setup
+```
+
+`setup` reuses or creates the CLI session, creates one owner-only shared Wine prefix, asks before downloading/installing the pinned official Connect client, records pinned-installer or explicit-trust provenance, saves that prefix as the default, and opens the official client only when remembered desktop authentication is absent during an interactive run. Use `--yes` to pre-authorize client installation, `--no-launch-connect` to configure without opening it, or explicit `--allow-connect-launch` when a JSON/noninteractive caller really wants the GUI. A safe client installed outside this setup flow requires explicit one-time `--trust-existing-connect` before setup will launch it.
+
+Check setup without launching Connect:
+
+```bash
+node dist/index.js setup --check
+node dist/index.js setup --check --json
+node dist/index.js setup --check --strict
+```
+
+After normal CLI app-directory initialization, the checker only inspects validated local state and does not contact Ubisoft or start Wine/Connect. `setupStatus: locally-ready` means the CLI session is structurally safe, the prefix/client provenance is configured, and expected opaque secure storage, user state, and ownership-cache evidence exist. It is **offline evidence**, not proof that Ubisoft has not expired or revoked the client session; only an actual official-client connection can establish current server validity.
+
+### 1. Log in manually (alternative)
 
 ```bash
 node dist/index.js login
@@ -396,10 +418,12 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 - session artifacts are stored locally in the app data directory
 - raw slice cache entries are stored locally under the cache directory by slice hash
 - `login --json` redacts ticket, session, and remember-me values
-- session files are atomically written with owner-only permissions; legacy session files are restricted when loaded
+- session files are schema/size/ownership validated, opened without symlink following, serialized across processes, and atomically written with owner-only permissions; legacy regular files are restricted through their open handle when loaded
 - resume state stores manifest/output identifiers and completed-file SHA-256 values only; it never stores signed URLs or session values
 - verbose HTTP logs redact URL query strings, including signed-URL parameters
 - this MVP currently uses local file storage rather than OS keychain integration, because the goal was to validate the research flow first.[2][9]
+- Ubisoft credential/configuration environment variables are stripped from all Wine/runner child environments, so `.env` passwords and MFA values are never inherited by the installer, Connect, or games
+- setup-installed clients receive an owner-only provenance marker tied to the pinned installer; a safe pre-existing client requires explicit `--trust-existing-connect` before setup will launch it
 - Wine prefixes containing remembered Connect authentication are sensitive and owner-only; `migrate-auth` copies only opaque official client AppData plus its device binding, never prints either, and requires explicit `--include-auth --yes`
 - authenticated prefix migration is one-way: starting the target may rotate the client session and invalidate the source, which must then be retired
 

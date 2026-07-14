@@ -1,4 +1,4 @@
-import { mkdtemp, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,7 +6,9 @@ import {
   clearSession,
   loadSession,
   redactSession,
-  saveSession
+  saveSession,
+  sessionExists,
+  withSessionLock
 } from '../src/core/session-store';
 import type { AppPaths } from '../src/models/config';
 
@@ -44,8 +46,33 @@ describe('session-store', () => {
       userId: 'user-value'
     });
 
+    const lockPath = `${paths.sessionFile}.lock`;
+    await writeFile(lockPath, 'held', { mode: 0o600 });
+    await expect(
+      withSessionLock(paths, () => Promise.resolve())
+    ).rejects.toThrow(/Another process/);
+
     await clearSession(paths);
     await expect(loadSession(paths)).resolves.toBeNull();
+  });
+
+  it('rejects symlinked and malformed session files without following them', async () => {
+    const paths = await makePaths();
+    const target = path.join(paths.dataDir, 'unrelated.json');
+    await writeFile(
+      target,
+      JSON.stringify({ ticket: 't', sessionId: 's', userId: 'u' }),
+      { mode: 0o600 }
+    );
+    await symlink(target, paths.sessionFile);
+
+    await expect(sessionExists(paths)).rejects.toThrow(/regular file/);
+    await expect(loadSession(paths)).rejects.toThrow(/regular file/);
+    expect((await stat(target)).mode & 0o777).toBe(0o600);
+
+    await clearSession(paths);
+    await writeFile(paths.sessionFile, '{}', { mode: 0o600 });
+    await expect(loadSession(paths)).rejects.toThrow(/required ticket/);
   });
 
   it('restricts permissions when loading a legacy session file', async () => {

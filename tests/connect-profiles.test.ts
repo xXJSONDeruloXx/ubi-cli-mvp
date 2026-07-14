@@ -6,7 +6,8 @@ import {
   emptyConnectProfileStore,
   loadConnectProfiles,
   resolveProfileWinePrefix,
-  saveConnectProfiles
+  saveConnectProfiles,
+  updateConnectProfiles
 } from '../src/services/connect-profiles';
 
 describe('Connect profile store', () => {
@@ -27,6 +28,31 @@ describe('Connect profile store', () => {
     expect(resolveProfileWinePrefix(store, '109')).toBe(
       store.defaultWinePrefix
     );
+  });
+
+  it('serializes read-modify-write profile updates', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ubi-connect-profiles-'));
+    const storePath = path.join(root, 'data', 'connect-profiles.json');
+    await updateConnectProfiles(storePath, (store) => {
+      store.defaultWinePrefix = '/prefix';
+    });
+    await expect(loadConnectProfiles(storePath)).resolves.toMatchObject({
+      defaultWinePrefix: '/prefix'
+    });
+
+    const lockPath = path.join(
+      path.dirname(storePath),
+      `.${path.basename(storePath)}.lock`
+    );
+    await writeFile(lockPath, 'held', { mode: 0o600 });
+    await expect(
+      updateConnectProfiles(storePath, (store) => {
+        store.defaultWinePrefix = '/other';
+      })
+    ).rejects.toThrow(/Another process/);
+    await expect(loadConnectProfiles(storePath)).resolves.toMatchObject({
+      defaultWinePrefix: '/prefix'
+    });
   });
 
   it('supports a product-specific prefix override', () => {

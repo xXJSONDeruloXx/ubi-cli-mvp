@@ -53,6 +53,7 @@ Current modules:
 - `public-catalog-service.ts`: fetch/cache `UplayManifests` datasets and build searchable config/title indexes.[11][12][13][14][15]
 - `ubisoft-connect.ts`: validate/cache the pinned official client installer, prepare explicit user-owned Wine prefixes, discover/start Connect, and run Wine-compatible child processes.
 - `connect-seed.ts`: discover client-owned paused-download staging, enforce process/path/symlink safeguards, hash-compare reconstructed payloads, and atomically seed only mismatched staged files without modifying Connect metadata.
+- `connect-setup.ts`: inspect a selected prefix without launching Connect and classify offline remembered-auth evidence from safe nonempty official-client artifacts.
 - `connect-profiles.ts`: atomically persist only non-secret product/source/prefix mappings in an owner-only local store.
 - `connect-prefix.ts`: guarded same-machine whole-prefix cloning plus targeted one-way migration of opaque official Connect AppData and its Wine device binding, with explicit authentication-state acknowledgement, stopped-process checks, atomic replacement/rollback, owner-only targets, and symlink rejection.
 
@@ -182,14 +183,16 @@ Current modules include:
 8. With `--finalize`, restart Connect and wait until its official install manifest exists and product staging is removed; with `--launch`, then invoke the registered product URI.
 9. Keep authoritative verification, finalization, entitlement, and DRM handling inside Connect.
 
-### Guided Connect launch
+### Guided Connect setup and launch
 
-1. Require an explicit Wine prefix so the default prefix is never modified unexpectedly.
-2. Discover Connect or, with `--ensure-connect --yes`, download the exact pinned installer from its constrained official HTTPS endpoint and validate SHA-256 plus PE certificate-table structure before execution.
-3. Keep the first-ever credential/MFA entry in the official client UI; never convert or inject the CLI web session. A stopped authenticated prefix may instead migrate Connect's opaque AppData plus matching Wine `MachineGuid` one-way into an existing fresh client prefix; starting the target can invalidate the source.
-4. After official install finalization, invoke `uplay://launch/<productId>/0` when `--connect-product-id` is supplied, allowing Connect to perform its normal launch/entitlement path without a Play-button click.
-5. `connect-install <productId>` can invoke the supported `uplay://install/<productId>` handler to open Connect's official first-install confirmations without library navigation; the CLI does not synthesize confirmation clicks.
-6. `connect-profile` stores non-secret product/prefix paths, and `play <productId>` resolves that profile, invokes the launch URI, monitors the profiled game process through Wine, then stops Connect after game exit to avoid residual launcher/promotional UI.
+1. `setup` preflights one explicit/configured/app-data shared prefix before authentication, reuses or creates the cross-process-locked CLI session, asks for explicit client-install consent, installs only the pinned verified official client, records owner-only provenance, and transactionally saves the prefix as the non-secret default. JSON/noninteractive mode never prompts or launches Connect unless explicitly allowed.
+2. `setup --check` performs no Wine/Connect launch: it reports structurally safe CLI-session presence, safe owner-only prefix/client installation provenance, and whether secure storage, user state, and ownership-cache evidence are all present. `locally-ready` is explicitly offline evidence and cannot prove that the server still accepts the remembered session.
+3. Require an explicit Wine prefix for lower-level launch/install commands so the default prefix is never modified unexpectedly.
+4. Discover Connect or, with explicit interactive confirmation/`--yes`, download the exact pinned installer from its constrained official HTTPS endpoint and validate SHA-256 plus PE certificate-table structure before execution.
+5. Keep the first-ever credential/MFA entry in the official client UI; never convert or inject the CLI web session. A stopped authenticated prefix may instead migrate Connect's opaque AppData plus matching Wine `MachineGuid` one-way into an existing fresh client prefix; starting the target can invalidate the source.
+6. After official install finalization, invoke `uplay://launch/<productId>/0` when `--connect-product-id` is supplied, allowing Connect to perform its normal launch/entitlement path without a Play-button click.
+7. `connect-install <productId>` can invoke the supported `uplay://install/<productId>` handler to open Connect's official first-install confirmations without library navigation; the CLI does not synthesize confirmation clicks.
+8. `connect-profile` stores non-secret product/prefix paths, and `play <productId>` resolves that profile, invokes the launch URI, monitors the profiled game process through Wine, then stops Connect after game exit to avoid residual launcher/promotional UI.
 
 ### Public/fallback manifest path
 
@@ -225,11 +228,11 @@ Default path: platform-specific user config/data/cache directories via `env-path
 Files:
 
 - `config.json`: non-secret settings such as app IDs, verbosity defaults, and cache settings
-- `session.json`: persisted session metadata and tickets (redacted in logs)
+- `session.json`: persisted session metadata and tickets; schema/size/owner validated, no-follow opened, mode-0600, cross-process locked, and redacted in logs
 - `cache/*.json`: cached public dataset snapshots from `UplayManifests`
 - `cache/demux-slices/*.slice`: cached raw Demux slice payloads keyed by slice hash
 - `connect-profiles.json`: mode-0600 non-secret product/source/prefix mappings for `ubi play`
-- user-selected Wine prefixes: contain sensitive official-client remembered authentication and must remain owner-only; they are never stored in the repository
+- user-selected Wine prefixes: contain sensitive official-client remembered authentication and must remain owner-only; setup records either pinned-installer or explicit-user-trust provenance in `.ubi-cli/verified-connect-install.json`, while all `UBI_*` variables are stripped from Wine children; prefixes are never stored in the repository
 - `debug/*`: optional raw manifest and Demux-related artifacts written during inspection flows
 
 ## Current blocker frontier

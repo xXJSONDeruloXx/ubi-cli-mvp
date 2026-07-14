@@ -5,6 +5,7 @@ import {
   mkdir,
   open,
   readFile,
+  realpath,
   rename,
   rm
 } from 'node:fs/promises';
@@ -104,6 +105,33 @@ function validateStore(value: unknown): ConnectProfileStore {
   };
 }
 
+async function ensureProfileDirectory(
+  directory: string,
+  create: boolean
+): Promise<void> {
+  if (create) {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+  }
+  const [directoryStats, canonical] = await Promise.all([
+    lstat(directory).catch(() => undefined),
+    realpath(directory).catch(() => undefined)
+  ]);
+  const currentUid = process.getuid?.();
+  if (
+    !directoryStats?.isDirectory() ||
+    directoryStats.isSymbolicLink() ||
+    canonical !== path.resolve(directory) ||
+    (currentUid !== undefined && directoryStats.uid !== currentUid)
+  ) {
+    throw new UserFacingError(
+      'Connect profile directory must be a user-owned real directory without symlink aliases.'
+    );
+  }
+  if (create) {
+    await chmod(directory, 0o700);
+  }
+}
+
 export async function loadConnectProfiles(
   storePath: string
 ): Promise<ConnectProfileStore> {
@@ -116,6 +144,7 @@ export async function loadConnectProfiles(
   if (!storeStats) {
     return emptyConnectProfileStore();
   }
+  await ensureProfileDirectory(path.dirname(storePath), false);
   if (!storeStats.isFile() || storeStats.isSymbolicLink()) {
     throw new UserFacingError(
       `Connect profile store must be a regular file: ${storePath}`
@@ -143,18 +172,7 @@ export async function saveConnectProfiles(
 ): Promise<void> {
   const validated = validateStore(store);
   const directory = path.dirname(storePath);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const directoryStats = await lstat(directory);
-  const currentUid = process.getuid?.();
-  if (
-    !directoryStats.isDirectory() ||
-    directoryStats.isSymbolicLink() ||
-    (currentUid !== undefined && directoryStats.uid !== currentUid)
-  ) {
-    throw new UserFacingError(
-      'Connect profile directory must be a user-owned real directory.'
-    );
-  }
+  await ensureProfileDirectory(directory, true);
 
   const temporary = path.join(
     directory,
@@ -173,6 +191,44 @@ export async function saveConnectProfiles(
   } catch (error) {
     await rm(temporary, { force: true });
     throw error;
+  }
+}
+
+export async function updateConnectProfiles(
+  storePath: string,
+  update: (store: ConnectProfileStore) => void | Promise<void>
+): Promise<ConnectProfileStore> {
+  const directory = path.dirname(storePath);
+  await ensureProfileDirectory(directory, true);
+  const lockPath = path.join(directory, `.${path.basename(storePath)}.lock`);
+  let lockHandle;
+  try {
+    lockHandle = await open(lockPath, 'wx', 0o600);
+    await lockHandle.writeFile(`${process.pid}\n`);
+  } catch (error) {
+    if (lockHandle) {
+      await lockHandle.close().catch(() => undefined);
+      await rm(lockPath, { force: true });
+    }
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new UserFacingError(
+        `Another process is updating Connect profiles. If it crashed, verify no ubi process remains before removing ${lockPath}.`
+      );
+    }
+    throw error;
+  }
+
+  try {
+    const store = await loadConnectProfiles(storePath);
+    await update(store);
+    await saveConnectProfiles(storePath, store);
+    return store;
+  } finally {
+    try {
+      await lockHandle.close();
+    } finally {
+      await rm(lockPath, { force: true });
+    }
   }
 }
 

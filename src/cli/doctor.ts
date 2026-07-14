@@ -1,10 +1,6 @@
 import process from 'node:process';
 import type { Command } from 'commander';
-import {
-  loadSession,
-  redactSession,
-  sessionExists
-} from '../core/session-store';
+import { loadSession, redactSession } from '../core/session-store';
 import { configFileExists } from '../core/config';
 import type { CliContext } from './context';
 
@@ -44,9 +40,8 @@ export function registerDoctorCommand(
     .option('--json', 'Output JSON')
     .action(async (options: { json?: boolean }) => {
       const context = await makeContext();
-      const [hasConfig, hasSession, session] = await Promise.all([
+      const [hasConfig, session] = await Promise.all([
         configFileExists(context.paths),
-        sessionExists(context.paths),
         loadSession(context.paths)
       ]);
 
@@ -57,7 +52,7 @@ export function registerDoctorCommand(
         cwd: process.cwd(),
         paths: context.paths,
         configFileExists: hasConfig,
-        sessionFileExists: hasSession,
+        sessionFileExists: session !== null,
         session: redactSession(session)
       };
 

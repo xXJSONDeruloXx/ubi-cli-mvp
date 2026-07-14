@@ -1,12 +1,14 @@
 import { execFile, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { constants, createWriteStream } from 'node:fs';
 import {
   chmod,
   copyFile,
   lstat,
   mkdir,
   open,
+  opendir,
+  realpath,
   rename,
   rm,
   stat
@@ -17,6 +19,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
+import { sanitizedChildEnvironment } from '../util/child-env';
 import { UserFacingError } from '../util/errors';
 
 const execFileAsync = promisify(execFile);
@@ -25,6 +28,11 @@ export const UBISOFT_CONNECT_INSTALLER_URL =
   'https://static3.cdn.ubi.com/orbit/launcher_installer/UbisoftConnectInstaller.exe';
 export const UBISOFT_CONNECT_INSTALLER_SHA256 =
   'da5de90b0655de136f4b33624da2e77c25b758c30708e2ec2e446c8fd3d68e33';
+
+const CONNECT_INSTALL_MARKER_RELATIVE_PATH = path.join(
+  '.ubi-cli',
+  'verified-connect-install.json'
+);
 
 const CONNECT_RELATIVE_PATHS = [
   path.join(
@@ -185,11 +193,180 @@ export async function verifyUbisoftConnectInstaller(
   };
 }
 
+export async function isEmptyDirectory(directory: string): Promise<boolean> {
+  const entries = await opendir(directory);
+  for await (const _entry of entries) {
+    return false;
+  }
+  return true;
+}
+
+export async function isRecognizableWinePrefix(
+  directory: string
+): Promise<boolean> {
+  const [drive, systemRegistry, userRegistry] = await Promise.all([
+    lstat(path.join(directory, 'drive_c')).catch(() => undefined),
+    lstat(path.join(directory, 'system.reg')).catch(() => undefined),
+    lstat(path.join(directory, 'user.reg')).catch(() => undefined)
+  ]);
+  return Boolean(
+    drive?.isDirectory() &&
+    !drive.isSymbolicLink() &&
+    systemRegistry?.isFile() &&
+    !systemRegistry.isSymbolicLink() &&
+    userRegistry?.isFile() &&
+    !userRegistry.isSymbolicLink()
+  );
+}
+
+async function assertSafeInstallDirectoryTree(
+  directory: string
+): Promise<void> {
+  const entries = await opendir(directory);
+  for await (const entry of entries) {
+    const entryPath = path.join(directory, entry.name);
+    const stats = await lstat(entryPath);
+    if (stats.isSymbolicLink()) {
+      throw new UserFacingError(
+        `Refusing Ubisoft Connect installation through a symlinked existing entry: ${entryPath}`
+      );
+    }
+    if (stats.isDirectory()) {
+      const canonical = await realpath(entryPath).catch(() => undefined);
+      if (canonical !== entryPath) {
+        throw new UserFacingError(
+          `Refusing Ubisoft Connect installation through an aliased directory: ${entryPath}`
+        );
+      }
+      await assertSafeInstallDirectoryTree(entryPath);
+      continue;
+    }
+    if (!stats.isFile() || stats.nlink !== 1) {
+      throw new UserFacingError(
+        `Refusing Ubisoft Connect installation through an unsafe existing file: ${entryPath}`
+      );
+    }
+  }
+}
+
+export async function assertSafeUbisoftConnectInstallDestinations(
+  prefix: string
+): Promise<void> {
+  const resolvedPrefix = path.resolve(prefix);
+  for (const relativePath of CONNECT_RELATIVE_PATHS) {
+    const parentSegments = path.dirname(relativePath).split(path.sep);
+    let current = resolvedPrefix;
+    for (const segment of parentSegments) {
+      current = path.join(current, segment);
+      const stats = await lstat(current).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return undefined;
+        }
+        throw error;
+      });
+      if (!stats) {
+        break;
+      }
+      const canonical = await realpath(current).catch(() => undefined);
+      if (
+        !stats.isDirectory() ||
+        stats.isSymbolicLink() ||
+        canonical !== current
+      ) {
+        throw new UserFacingError(
+          `Refusing Ubisoft Connect installation through an unsafe prefix path component: ${current}`
+        );
+      }
+    }
+
+    const installDirectory = path.join(
+      resolvedPrefix,
+      path.dirname(relativePath)
+    );
+    const installDirectoryStats = await lstat(installDirectory).catch(
+      () => undefined
+    );
+    if (installDirectoryStats?.isDirectory()) {
+      await assertSafeInstallDirectoryTree(installDirectory);
+    }
+
+    const destination = path.join(resolvedPrefix, relativePath);
+    const destinationStats = await lstat(destination).catch(
+      (error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return undefined;
+        }
+        throw error;
+      }
+    );
+    if (destinationStats) {
+      const canonicalDestination = await realpath(destination).catch(
+        () => undefined
+      );
+      if (
+        !destinationStats.isFile() ||
+        destinationStats.isSymbolicLink() ||
+        destinationStats.nlink !== 1 ||
+        canonicalDestination !== destination
+      ) {
+        throw new UserFacingError(
+          `Refusing Ubisoft Connect installation through an unsafe destination file: ${destination}`
+        );
+      }
+    }
+  }
+}
+
 export async function prepareWinePrefix(prefix: string): Promise<string> {
   const resolved = path.resolve(prefix);
+  const existingPrefix = await lstat(resolved).catch(() => undefined);
+  let existingAncestor = resolved;
+  while (!(await lstat(existingAncestor).catch(() => undefined))) {
+    const parent = path.dirname(existingAncestor);
+    if (parent === existingAncestor) {
+      break;
+    }
+    existingAncestor = parent;
+  }
+  const [ancestorStats, canonicalAncestor] = await Promise.all([
+    lstat(existingAncestor).catch(() => undefined),
+    realpath(existingAncestor).catch(() => undefined)
+  ]);
+  if (
+    !ancestorStats?.isDirectory() ||
+    ancestorStats.isSymbolicLink() ||
+    canonicalAncestor !== existingAncestor
+  ) {
+    throw new UserFacingError(
+      `Wine prefix path must not traverse a symlink: ${resolved}`
+    );
+  }
+
+  const trustedExistingClient = existingPrefix?.isDirectory()
+    ? Boolean(await getUbisoftConnectInstallationProvenance(resolved))
+    : false;
+  if (
+    existingPrefix?.isDirectory() &&
+    !existingPrefix.isSymbolicLink() &&
+    !(await isEmptyDirectory(resolved)) &&
+    !(await isRecognizableWinePrefix(resolved)) &&
+    !trustedExistingClient
+  ) {
+    throw new UserFacingError(
+      `Refusing to initialize a nonempty directory that is not a recognizable Wine prefix: ${resolved}`
+    );
+  }
+
   await mkdir(resolved, { recursive: true, mode: 0o700 });
-  const prefixStats = await lstat(resolved);
-  if (!prefixStats.isDirectory() || prefixStats.isSymbolicLink()) {
+  const [prefixStats, canonicalPrefix] = await Promise.all([
+    lstat(resolved),
+    realpath(resolved)
+  ]);
+  if (
+    !prefixStats.isDirectory() ||
+    prefixStats.isSymbolicLink() ||
+    canonicalPrefix !== resolved
+  ) {
     throw new UserFacingError(
       `Wine prefix must be a real directory, not a symlink: ${resolved}`
     );
@@ -201,6 +378,7 @@ export async function prepareWinePrefix(prefix: string): Promise<string> {
       `Wine prefix is not owned by the current user: ${resolved}`
     );
   }
+  await chmod(resolved, 0o700);
 
   return resolved;
 }
@@ -208,14 +386,181 @@ export async function prepareWinePrefix(prefix: string): Promise<string> {
 export async function findUbisoftConnectExecutable(
   prefix: string
 ): Promise<string | undefined> {
+  const resolvedPrefix = path.resolve(prefix);
   for (const relativePath of CONNECT_RELATIVE_PATHS) {
-    const candidate = path.join(prefix, relativePath);
-    const candidateStats = await stat(candidate).catch(() => undefined);
-    if (candidateStats?.isFile()) {
+    const candidate = path.join(resolvedPrefix, relativePath);
+    const [candidateStats, canonicalCandidate] = await Promise.all([
+      lstat(candidate).catch(() => undefined),
+      realpath(candidate).catch(() => undefined)
+    ]);
+    if (
+      candidateStats?.isFile() &&
+      !candidateStats.isSymbolicLink() &&
+      candidateStats.size > 0 &&
+      canonicalCandidate === candidate
+    ) {
       return candidate;
     }
   }
   return undefined;
+}
+
+export type ConnectInstallationProvenance =
+  | 'pinned-installer'
+  | 'explicit-trust';
+
+export async function getUbisoftConnectInstallationProvenance(
+  prefix: string,
+  executable?: string
+): Promise<ConnectInstallationProvenance | undefined> {
+  const resolvedPrefix = path.resolve(prefix);
+  const clientExecutable =
+    executable ?? (await findUbisoftConnectExecutable(resolvedPrefix));
+  if (!clientExecutable) {
+    return undefined;
+  }
+  const markerPath = path.join(
+    resolvedPrefix,
+    CONNECT_INSTALL_MARKER_RELATIVE_PATH
+  );
+  const markerDirectory = path.dirname(markerPath);
+  const [directoryStats, canonicalDirectory, markerStats] = await Promise.all([
+    lstat(markerDirectory).catch(() => undefined),
+    realpath(markerDirectory).catch(() => undefined),
+    lstat(markerPath).catch(() => undefined)
+  ]);
+  const currentUid = process.getuid?.();
+  if (
+    !directoryStats?.isDirectory() ||
+    directoryStats.isSymbolicLink() ||
+    canonicalDirectory !== markerDirectory ||
+    (directoryStats.mode & 0o077) !== 0 ||
+    (currentUid !== undefined && directoryStats.uid !== currentUid) ||
+    !markerStats?.isFile() ||
+    markerStats.isSymbolicLink() ||
+    markerStats.size === 0 ||
+    markerStats.size > 4096 ||
+    (markerStats.mode & 0o077) !== 0 ||
+    (currentUid !== undefined && markerStats.uid !== currentUid)
+  ) {
+    return undefined;
+  }
+  let handle;
+  try {
+    handle = await open(markerPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const marker = JSON.parse(await handle.readFile('utf8')) as Record<
+      string,
+      unknown
+    >;
+    if (
+      marker.version !== 1 ||
+      marker.clientRelativePath !==
+        path.relative(resolvedPrefix, clientExecutable)
+    ) {
+      return undefined;
+    }
+    if (
+      marker.provenance === 'pinned-installer' &&
+      marker.installerSha256 === UBISOFT_CONNECT_INSTALLER_SHA256
+    ) {
+      return 'pinned-installer';
+    }
+    if (marker.provenance === 'explicit-trust') {
+      return 'explicit-trust';
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close();
+  }
+}
+
+export async function isUbisoftConnectInstallationVerified(
+  prefix: string,
+  executable?: string
+): Promise<boolean> {
+  return Boolean(
+    await getUbisoftConnectInstallationProvenance(prefix, executable)
+  );
+}
+
+export async function trustUbisoftConnectInstallation(
+  prefix: string,
+  executable?: string,
+  provenance: ConnectInstallationProvenance = 'explicit-trust'
+): Promise<void> {
+  const resolvedPrefix = path.resolve(prefix);
+  const discoveredExecutable =
+    await findUbisoftConnectExecutable(resolvedPrefix);
+  const clientExecutable = executable
+    ? path.resolve(executable)
+    : discoveredExecutable;
+  if (
+    !discoveredExecutable ||
+    !clientExecutable ||
+    clientExecutable !== discoveredExecutable
+  ) {
+    throw new UserFacingError(
+      'A safe existing Ubisoft Connect executable was not found to trust.'
+    );
+  }
+  const markerPath = path.join(
+    resolvedPrefix,
+    CONNECT_INSTALL_MARKER_RELATIVE_PATH
+  );
+  const markerDirectory = path.dirname(markerPath);
+  const existingDirectory = await lstat(markerDirectory).catch(() => undefined);
+  if (existingDirectory?.isSymbolicLink()) {
+    throw new UserFacingError(
+      'Refusing a symlinked Connect installation provenance directory.'
+    );
+  }
+  await mkdir(markerDirectory, { recursive: true, mode: 0o700 });
+  const [directoryStats, canonicalDirectory] = await Promise.all([
+    lstat(markerDirectory),
+    realpath(markerDirectory)
+  ]);
+  const currentUid = process.getuid?.();
+  if (
+    !directoryStats.isDirectory() ||
+    directoryStats.isSymbolicLink() ||
+    canonicalDirectory !== markerDirectory ||
+    (currentUid !== undefined && directoryStats.uid !== currentUid)
+  ) {
+    throw new UserFacingError(
+      'Connect installation provenance directory must be a user-owned real directory.'
+    );
+  }
+  await chmod(markerDirectory, 0o700);
+  const temporary = `${markerPath}.${randomUUID()}.partial`;
+  try {
+    const handle = await open(temporary, 'wx', 0o600);
+    try {
+      await handle.writeFile(
+        `${JSON.stringify(
+          {
+            version: 1,
+            provenance,
+            ...(provenance === 'pinned-installer'
+              ? { installerSha256: UBISOFT_CONNECT_INSTALLER_SHA256 }
+              : {}),
+            clientRelativePath: path.relative(resolvedPrefix, clientExecutable)
+          },
+          null,
+          2
+        )}\n`
+      );
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(temporary, markerPath);
+    await chmod(markerPath, 0o600);
+  } catch (error) {
+    await rm(temporary, { force: true });
+    throw error;
+  }
 }
 
 async function downloadPinnedInstaller(destination: string): Promise<void> {
@@ -318,11 +663,10 @@ export function buildWineProcessSpec(
     command: runner,
     args: [...runnerArgs, executable],
     cwd: path.dirname(executable),
-    env: {
-      ...process.env,
+    env: sanitizedChildEnvironment({
       ...extraEnv,
       ...(prefix ? { WINEPREFIX: prefix } : {})
-    }
+    })
   };
 }
 
@@ -365,7 +709,10 @@ async function wineTaskIsRunning(
 ): Promise<boolean> {
   try {
     const result = await execFileAsync(runner, [...runnerArgs, 'tasklist'], {
-      env: { ...process.env, WINEPREFIX: prefix, WINEDEBUG: '-all' },
+      env: sanitizedChildEnvironment({
+        WINEPREFIX: prefix,
+        WINEDEBUG: '-all'
+      }),
       encoding: 'utf8'
     });
     return result.stdout.toLowerCase().includes(imageName.toLowerCase());
@@ -425,7 +772,10 @@ export async function stopUbisoftConnect(
 ): Promise<void> {
   try {
     await execFileAsync(runner, [...runnerArgs, 'taskkill', '/IM', 'upc.exe'], {
-      env: { ...process.env, WINEPREFIX: prefix, WINEDEBUG: '-all' },
+      env: sanitizedChildEnvironment({
+        WINEPREFIX: prefix,
+        WINEDEBUG: '-all'
+      }),
       encoding: 'utf8'
     });
   } catch (error) {
@@ -440,12 +790,15 @@ export async function installUbisoftConnect(
   runner: string,
   runnerArgs: string[],
   prefix: string,
-  installerPath: string
+  installerPath: string,
+  stdio: 'inherit' | 'ignore' = 'inherit'
 ): Promise<string> {
+  await assertSafeUbisoftConnectInstallDestinations(prefix);
   const spec = buildWineProcessSpec(runner, installerPath, prefix, runnerArgs, {
     WINEDLLOVERRIDES: 'mscoree,mshtml='
   });
   spec.args.push('/S');
+  spec.stdio = stdio;
   await runProcess(spec, 'Ubisoft Connect installer');
 
   const executable = await findUbisoftConnectExecutable(prefix);
@@ -454,5 +807,6 @@ export async function installUbisoftConnect(
       'Ubisoft Connect installer exited successfully, but UbisoftConnect.exe was not found in the Wine prefix.'
     );
   }
+  await trustUbisoftConnectInstallation(prefix, executable, 'pinned-installer');
   return executable;
 }

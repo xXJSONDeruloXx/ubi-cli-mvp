@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import {
   chmod,
+  link,
+  lstat,
   mkdtemp,
   mkdir,
   readFile,
@@ -11,10 +13,14 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  assertSafeUbisoftConnectInstallDestinations,
   buildWineProcessSpec,
   findUbisoftConnectExecutable,
+  getUbisoftConnectInstallationProvenance,
+  isUbisoftConnectInstallationVerified,
   prepareWinePrefix,
   stopUbisoftConnect,
+  trustUbisoftConnectInstallation,
   verifyUbisoftConnectInstaller,
   waitForWineProcessLifecycle
 } from '../src/services/ubisoft-connect';
@@ -64,6 +70,68 @@ describe('Ubisoft Connect bootstrap helpers', () => {
     const linkedPrefix = path.join(root, 'linked-prefix');
     await symlink(prefix, linkedPrefix);
     await expect(prepareWinePrefix(linkedPrefix)).rejects.toThrow(/symlink/);
+
+    const realParent = path.join(root, 'real-parent');
+    const linkedParent = path.join(root, 'linked-parent');
+    await mkdir(realParent);
+    await symlink(realParent, linkedParent);
+    await expect(
+      prepareWinePrefix(path.join(linkedParent, 'nested-prefix'))
+    ).rejects.toThrow(/symlink/);
+
+    const unrelated = path.join(root, 'unrelated');
+    await mkdir(unrelated);
+    await writeFile(path.join(unrelated, 'personal-file'), 'keep');
+    await expect(prepareWinePrefix(unrelated)).rejects.toThrow(
+      /not a recognizable Wine prefix/
+    );
+
+    const unsafePrefix = path.join(root, 'unsafe-prefix');
+    const outsideInstall = path.join(root, 'outside-install');
+    await mkdir(path.join(unsafePrefix, 'drive_c'), { recursive: true });
+    await mkdir(outsideInstall);
+    await writeFile(path.join(unsafePrefix, 'system.reg'), 'registry');
+    await writeFile(path.join(unsafePrefix, 'user.reg'), 'registry');
+    await symlink(
+      outsideInstall,
+      path.join(unsafePrefix, 'drive_c', 'Program Files (x86)')
+    );
+    await expect(
+      assertSafeUbisoftConnectInstallDestinations(unsafePrefix)
+    ).rejects.toThrow(/unsafe prefix path component/);
+
+    const unsafeLeafPrefix = path.join(root, 'unsafe-leaf-prefix');
+    const unsafeLeaf = path.join(
+      unsafeLeafPrefix,
+      'drive_c',
+      'Program Files (x86)',
+      'Ubisoft',
+      'Ubisoft Game Launcher',
+      'UbisoftConnect.exe'
+    );
+    const outsideExecutable = path.join(root, 'outside.exe');
+    await mkdir(path.dirname(unsafeLeaf), { recursive: true });
+    await writeFile(outsideExecutable, 'outside');
+    await symlink(outsideExecutable, unsafeLeaf);
+    await expect(
+      assertSafeUbisoftConnectInstallDestinations(unsafeLeafPrefix)
+    ).rejects.toThrow(/symlinked existing entry/);
+
+    const hardlinkPrefix = path.join(root, 'hardlink-prefix');
+    const hardlinkDirectory = path.join(
+      hardlinkPrefix,
+      'drive_c',
+      'Program Files (x86)',
+      'Ubisoft',
+      'Ubisoft Game Launcher'
+    );
+    const hardlinkSource = path.join(root, 'hardlink-source.exe');
+    await mkdir(hardlinkDirectory, { recursive: true });
+    await writeFile(hardlinkSource, 'outside');
+    await link(hardlinkSource, path.join(hardlinkDirectory, 'upc.exe'));
+    await expect(
+      assertSafeUbisoftConnectInstallDestinations(hardlinkPrefix)
+    ).rejects.toThrow(/unsafe existing file/);
   });
 
   it('tracks a game lifecycle and can stop the background client', async () => {
@@ -105,10 +173,62 @@ describe('Ubisoft Connect bootstrap helpers', () => {
     await writeFile(client, 'test');
 
     await expect(findUbisoftConnectExecutable(root)).resolves.toBe(client);
+    await expect(
+      isUbisoftConnectInstallationVerified(root, client)
+    ).resolves.toBe(false);
+    await trustUbisoftConnectInstallation(root, client);
+    await expect(
+      isUbisoftConnectInstallationVerified(root, client)
+    ).resolves.toBe(true);
+    await expect(
+      getUbisoftConnectInstallationProvenance(root, client)
+    ).resolves.toBe('explicit-trust');
+    await expect(prepareWinePrefix(root)).resolves.toBe(root);
+    expect(
+      (
+        await lstat(
+          path.join(root, '.ubi-cli', 'verified-connect-install.json')
+        )
+      ).mode & 0o777
+    ).toBe(0o600);
+
     const spec = buildWineProcessSpec('proton', client, root, ['run']);
     expect(spec.command).toBe('proton');
     expect(spec.args).toEqual(['run', client]);
     expect(spec.cwd).toBe(path.dirname(client));
     expect(spec.env.WINEPREFIX).toBe(root);
+
+    const linkedRoot = await mkdtemp(path.join(tmpdir(), 'ubi-connect-'));
+    const linkedClient = path.join(
+      linkedRoot,
+      'drive_c',
+      'Program Files (x86)',
+      'Ubisoft',
+      'Ubisoft Game Launcher',
+      'UbisoftConnect.exe'
+    );
+    await mkdir(path.dirname(linkedClient), { recursive: true });
+    await symlink(client, linkedClient);
+    await expect(
+      findUbisoftConnectExecutable(linkedRoot)
+    ).resolves.toBeUndefined();
+
+    const markerRoot = await mkdtemp(path.join(tmpdir(), 'ubi-connect-'));
+    const markerClient = path.join(
+      markerRoot,
+      'drive_c',
+      'Program Files (x86)',
+      'Ubisoft',
+      'Ubisoft Game Launcher',
+      'UbisoftConnect.exe'
+    );
+    const outsideMarker = path.join(markerRoot, 'outside-marker');
+    await mkdir(path.dirname(markerClient), { recursive: true });
+    await mkdir(outsideMarker);
+    await writeFile(markerClient, 'client');
+    await symlink(outsideMarker, path.join(markerRoot, '.ubi-cli'));
+    await expect(
+      trustUbisoftConnectInstallation(markerRoot, markerClient)
+    ).rejects.toThrow(/symlinked/);
   });
 });

@@ -12,6 +12,11 @@ import { Command } from 'commander';
 import { describe, expect, it } from 'vitest';
 import { registerRunCommand, resolveGameExecutable } from '../src/cli/run';
 
+async function markRecognizableWinePrefix(prefix: string): Promise<void> {
+  await writeFile(path.join(prefix, 'system.reg'), 'registry');
+  await writeFile(path.join(prefix, 'user.reg'), 'registry');
+}
+
 describe('run command executable resolution', () => {
   it('auto-selects a single executable and contains explicit relative paths', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'ubi-run-'));
@@ -107,6 +112,7 @@ describe('run command executable resolution', () => {
     await mkdir(connectDir, { recursive: true });
     await writeFile(game, 'test');
     await writeFile(connect, 'test');
+    await markRecognizableWinePrefix(prefix);
     await writeFile(
       runner,
       `#!/bin/sh\nprintf '%s|%s|%s\\n' "$PWD" "$WINEPREFIX" "$*" >> ${JSON.stringify(observed)}\n`
@@ -153,6 +159,7 @@ describe('run command executable resolution', () => {
     await mkdir(connectDir, { recursive: true });
     await writeFile(path.join(root, 'game.exe'), 'test');
     await writeFile(connect, 'test');
+    await markRecognizableWinePrefix(prefix);
     await writeFile(
       runner,
       `#!/bin/sh\nprintf '%s|%s|%s\\n' "$PWD" "$WINEPREFIX" "$*" >> ${JSON.stringify(observed)}\n`

@@ -16,6 +16,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
+import { sanitizedChildEnvironment } from '../util/child-env';
 import { UserFacingError } from '../util/errors';
 import { findUbisoftConnectExecutable } from './ubisoft-connect';
 
@@ -108,7 +109,10 @@ async function assertConnectStopped(
   let stdout: string;
   try {
     const result = await execFileAsync(runner, [...runnerArgs, 'tasklist'], {
-      env: { ...process.env, WINEPREFIX: prefix, WINEDEBUG: '-all' },
+      env: sanitizedChildEnvironment({
+        WINEPREFIX: prefix,
+        WINEDEBUG: '-all'
+      }),
       encoding: 'utf8'
     });
     stdout = result.stdout;
@@ -163,7 +167,10 @@ async function resolveConnectAppData(
       runner,
       [...runnerArgs, 'cmd', '/d', '/s', '/c', 'echo %LOCALAPPDATA%'],
       {
-        env: { ...process.env, WINEPREFIX: prefix, WINEDEBUG: '-all' },
+        env: sanitizedChildEnvironment({
+          WINEPREFIX: prefix,
+          WINEDEBUG: '-all'
+        }),
         encoding: 'utf8'
       }
     );
@@ -221,7 +228,10 @@ async function readMachineGuid(
         'MachineGuid'
       ],
       {
-        env: { ...process.env, WINEPREFIX: prefix, WINEDEBUG: '-all' },
+        env: sanitizedChildEnvironment({
+          WINEPREFIX: prefix,
+          WINEDEBUG: '-all'
+        }),
         encoding: 'utf8'
       }
     );
@@ -320,7 +330,10 @@ async function writeMachineGuid(
       runner,
       [...runnerArgs, 'reg', 'import', registryFile],
       {
-        env: { ...process.env, WINEPREFIX: prefix, WINEDEBUG: '-all' },
+        env: sanitizedChildEnvironment({
+          WINEPREFIX: prefix,
+          WINEDEBUG: '-all'
+        }),
         encoding: 'utf8'
       }
     );
