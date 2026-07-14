@@ -194,6 +194,20 @@ Current modules include:
 7. `connect-install <productId>` can invoke the supported `uplay://install/<productId>` handler to open Connect's official first-install confirmations without library navigation; the CLI does not synthesize confirmation clicks.
 8. `connect-profile` stores non-secret product/prefix paths, and `play <productId>` resolves that profile, invokes the launch URI, monitors the profiled game process through Wine, then stops Connect after game exit to avoid residual launcher/promotional UI.
 
+### Connect remembered-auth lifecycle
+
+The official client's remembered state is separate from `session.json`. A metadata-only fresh-prefix trace established this lifecycle:
+
+1. Before first desktop authentication, the Connect AppData profile has no secure-storage, user-state, or ownership-cache evidence.
+2. Official password/MFA entry creates `user.dat`, then `ConnectSecureStorage.dat`, then ownership-cache state below the Wine user's `AppData/Local/Ubisoft Game Launcher` directory.
+3. `settings.yaml` keeps `username`, `password`, and `exchangeCode` empty. Secure storage is an opaque binary container with a visible `RememberMeTicket` structural label, not a plaintext settings password.
+4. A later authenticated launch mutates `ConnectSecureStorage.dat` without changing its size, while leaving `user.dat` and the ownership-cache content stable. Treat the client credential as rotating/mutable state.
+5. Earlier isolation showed that complete Connect AppData alone is insufficient in another prefix; the matching Wine `HKLM\\Software\\Microsoft\\Cryptography\\MachineGuid` device identity is also required.
+6. `setup --check` deliberately uses only safe existence/type/nonempty tests. It reports local evidence, never decodes secure storage, and cannot establish server validity.
+7. The CLI public-services ticket and remember-me ticket are not handed to Connect. No exact CLI ticket value was found verbatim in Connect storage, and no supported desktop SSO/device-code/ticket-import interface has been identified.
+
+Consequently, a prefix containing this state is a credential container and must remain mode-0700 and owner-only. Copying it is an explicit one-way migration operation; it is not a reusable parallel template. First-ever desktop authentication remains an official-client interaction until a supported handoff exists.
+
 ### Public/fallback manifest path
 
 1. Resolve known manifest hashes from `manifestlist.json`.[13]
@@ -232,7 +246,7 @@ Files:
 - `cache/*.json`: cached public dataset snapshots from `UplayManifests`
 - `cache/demux-slices/*.slice`: cached raw Demux slice payloads keyed by slice hash
 - `connect-profiles.json`: mode-0600 non-secret product/source/prefix mappings for `ubi play`
-- user-selected Wine prefixes: contain sensitive official-client remembered authentication and must remain owner-only; setup records either pinned-installer or explicit-user-trust provenance in `.ubi-cli/verified-connect-install.json`, while all `UBI_*` variables are stripped from Wine children; prefixes are never stored in the repository
+- user-selected Wine prefixes: contain sensitive official-client remembered authentication below `drive_c/users/<wine-user>/AppData/Local/Ubisoft Game Launcher` plus device binding in the Wine registry; they must remain owner-only; setup records either pinned-installer or explicit-user-trust provenance in `.ubi-cli/verified-connect-install.json`, while all `UBI_*` variables are stripped from Wine children; prefixes are never stored in the repository
 - `debug/*`: optional raw manifest and Demux-related artifacts written during inspection flows
 
 ## Current blocker frontier

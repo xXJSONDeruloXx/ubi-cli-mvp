@@ -168,6 +168,8 @@ node dist/index.js setup --check --strict
 
 After normal CLI app-directory initialization, the checker only inspects validated local state and does not contact Ubisoft or start Wine/Connect. `setupStatus: locally-ready` means the CLI session is structurally safe, the prefix/client provenance is configured, and expected opaque secure storage, user state, and ownership-cache evidence exist. It is **offline evidence**, not proof that Ubisoft has not expired or revoked the client session; only an actual official-client connection can establish current server validity.
 
+A controlled fresh-prefix trace confirmed that Connect creates `ConnectSecureStorage.dat`, `user.dat`, and `cache/ownership/*` below the Wine user's `AppData/Local/Ubisoft Game Launcher` directory. Secure storage contained a `RememberMeTicket` structural label, changed on a later authenticated launch, and remained bound to companion AppData plus the Wine `MachineGuid`; `settings.yaml` did not retain a username or password. The CLI session remains separate, and no supported ticket handoff into Connect has been identified. See [research](docs/research.md#fresh-client-remembered-auth-trace-2026-07-13).
+
 ### 1. Log in manually (alternative)
 
 ```bash
@@ -409,7 +411,7 @@ Main directories:
 - `tests/` — unit and smoke tests
 - `docs/` — research, architecture, roadmap, validation, references
 
-See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6][11]
+See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6][11] A static comparison with Optima's launcherless legacy-client approach is documented in [`docs/optima-comparison.md`](docs/optima-comparison.md).[23]
 
 ## Security and storage
 

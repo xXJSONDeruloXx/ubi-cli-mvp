@@ -126,6 +126,59 @@ No reviewed source documented:
 
 **Experimentally validated in this repo:** Connect's remembered authentication is an opaque client profile bound to the Wine device identity. Secure-storage files or AppData alone were insufficient; migrating complete official Connect AppData with the matching Wine `MachineGuid` authenticated a newly installed prefix without copying product registration. This is one-way migration, not conversion of CLI credentials/session and not a parallel template: client token rotation may invalidate the source.[19]
 
+### Fresh-client remembered-auth trace (2026-07-13)
+
+A second controlled experiment installed the pinned official client into a fresh mode-0700 Wine prefix and captured only file paths, sizes, modes, hashes, process names, and DNS names. It did not record keystrokes, process memory, credential values, TLS payloads, or raw authentication headers. The operator entered the password and MFA only in the official client. The experimental authenticated prefix and raw observations were deleted afterward.[19]
+
+Before authentication, the prefix had no remembered-auth evidence. The official client then created state below:
+
+```text
+<prefix>/drive_c/users/<wine-user>/AppData/Local/Ubisoft Game Launcher/
+├── ConnectSecureStorage.dat
+├── user.dat
+└── cache/ownership/*
+```
+
+The metadata-only timeline was:
+
+| Seconds after monitoring began | Observed event                                          |
+| -----------------------------: | ------------------------------------------------------- |
+|                           45.1 | `user.dat` created                                      |
+|                           80.8 | `ConnectSecureStorage.dat` created                      |
+|                           82.0 | `ConnectSecureStorage.dat` updated                      |
+|                          114.3 | One ownership-cache file created and `user.dat` updated |
+
+After the authenticated library had loaded:
+
+- `ConnectSecureStorage.dat` was 8,124 bytes;
+- `user.dat` was 518 bytes;
+- one ownership-cache file was present and was 3,384 bytes;
+- `settings.yaml` had empty serialized values for `username`, `password`, and `exchangeCode`; and
+- the two `.dat` files were binary/opaque. Structural inspection found a `RememberMeTicket` field label in secure storage and no password field label. No credential value was decoded, printed, or retained.[19]
+
+After a full client stop, all three evidence classes remained present. Relaunching the same prefix skipped the login form and opened authenticated. During that startup, `ConnectSecureStorage.dat` changed content while remaining exactly 8,124 bytes; `user.dat` and the ownership-cache content did not change. This directly supports the earlier clone/migration observation that remembered state is mutable and likely refreshed or rotated on launch rather than being a permanent static credential.[19]
+
+DNS-only monitoring during the authenticated restart observed service families including:
+
+- `public-ubiservices.ubi.com` and the live public gateway;
+- `public-ws-ubiservices.ubi.com`;
+- `channel-service.upc.ubi.com`;
+- `dmx.upc.ubisoft.com`;
+- `connect.cdn.ubisoft.com`; and
+- `store-sessions.ecom.ubi.com`.[19]
+
+The CLI's existing session and Connect's remembered state remain separate. An exact-value comparison, performed without printing either value, found neither the CLI ticket nor its CLI remember-me ticket verbatim in Connect secure storage in plain, UTF-16LE, or UTF-16BE representation. Combined with the previous `MachineGuid` migration result, the strongest current model is:
+
+```text
+Official password/MFA entry
+  -> Ubisoft session services
+  -> desktop-specific opaque remember-me state
+  -> ConnectSecureStorage.dat + companion AppData + Wine MachineGuid
+  -> server refresh/rotation during later official-client launches
+```
+
+This does not establish the encryption algorithm or prove that every field is encrypted; it establishes only the observed storage/lifecycle boundary. A CLI-only Ubisoft public-services session is already implemented, but no supported device-code, SSO URI, command-line ticket handoff, or documented conversion into desktop remembered state has been found. Manufacturing secure storage from CLI credentials would therefore be unsupported, device-binding-sensitive, and unsafe; first official-client authentication remains interactive unless a supported handoff is discovered.[19]
+
 ## Proposed implementation path
 
 ### Auth/session

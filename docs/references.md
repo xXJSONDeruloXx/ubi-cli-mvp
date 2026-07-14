@@ -43,3 +43,5 @@
 [21] PlayniteExtensions, `UplayLibrary.cs`. Open-source Ubisoft/Uplay launcher integration using product action URIs such as `uplay://install/<productId>` while relying on the official desktop client for authentication and installation. https://github.com/JosefNemec/PlayniteExtensions/blob/master/source/Libraries/UplayLibrary/UplayLibrary.cs
 
 [22] IETF RFC 8628, OAuth 2.0 Device Authorization Grant. Defines the endpoint and response contract required for a documented OAuth device-code flow; no equivalent public Connect PC contract was found. https://www.rfc-editor.org/rfc/rfc8628
+
+[23] Starkka15, `Optima` at commit `026f0ae`. A Rust ownership/Demux/CDN client with launcherless Uplay R1/Orbit R2 compatibility shims; reviewed statically in `docs/optima-comparison.md`. https://github.com/Starkka15/Optima/tree/026f0ae
