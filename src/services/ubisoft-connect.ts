@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import {
@@ -15,7 +15,11 @@ import path from 'node:path';
 import process from 'node:process';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { setTimeout as delay } from 'node:timers/promises';
+import { promisify } from 'node:util';
 import { UserFacingError } from '../util/errors';
+
+const execFileAsync = promisify(execFile);
 
 export const UBISOFT_CONNECT_INSTALLER_URL =
   'https://static3.cdn.ubi.com/orbit/launcher_installer/UbisoftConnectInstaller.exe';
@@ -351,6 +355,85 @@ export async function runProcess(
       );
     });
   });
+}
+
+async function wineTaskIsRunning(
+  runner: string,
+  runnerArgs: string[],
+  prefix: string,
+  imageName: string
+): Promise<boolean> {
+  try {
+    const result = await execFileAsync(runner, [...runnerArgs, 'tasklist'], {
+      env: { ...process.env, WINEPREFIX: prefix, WINEDEBUG: '-all' },
+      encoding: 'utf8'
+    });
+    return result.stdout.toLowerCase().includes(imageName.toLowerCase());
+  } catch (error) {
+    throw new UserFacingError(
+      `Could not inspect Wine processes: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+}
+
+export async function waitForWineProcessLifecycle(
+  runner: string,
+  runnerArgs: string[],
+  prefix: string,
+  imageName: string,
+  options: {
+    startTimeoutMs?: number;
+    absentSettleMs?: number;
+    pollIntervalMs?: number;
+  } = {}
+): Promise<void> {
+  const pollIntervalMs = options.pollIntervalMs ?? 500;
+  const startDeadline = Date.now() + (options.startTimeoutMs ?? 2 * 60_000);
+  let started = false;
+  while (Date.now() < startDeadline) {
+    if (await wineTaskIsRunning(runner, runnerArgs, prefix, imageName)) {
+      started = true;
+      break;
+    }
+    await delay(pollIntervalMs);
+  }
+  if (!started) {
+    throw new UserFacingError(
+      `${imageName} did not start within two minutes. Ubisoft Connect was left open for inspection.`
+    );
+  }
+
+  const settleMs = options.absentSettleMs ?? 5_000;
+  let absentSince: number | undefined;
+  while (true) {
+    if (await wineTaskIsRunning(runner, runnerArgs, prefix, imageName)) {
+      absentSince = undefined;
+    } else {
+      absentSince ??= Date.now();
+      if (Date.now() - absentSince >= settleMs) {
+        return;
+      }
+    }
+    await delay(pollIntervalMs);
+  }
+}
+
+export async function stopUbisoftConnect(
+  runner: string,
+  runnerArgs: string[],
+  prefix: string
+): Promise<void> {
+  try {
+    await execFileAsync(runner, [...runnerArgs, 'taskkill', '/IM', 'upc.exe'], {
+      env: { ...process.env, WINEPREFIX: prefix, WINEDEBUG: '-all' },
+      encoding: 'utf8'
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/not found|no running instance|128/i.test(message)) {
+      throw new UserFacingError(`Could not stop Ubisoft Connect: ${message}`);
+    }
+  }
 }
 
 export async function installUbisoftConnect(

@@ -57,6 +57,9 @@ Implemented or partially implemented commands:
 - `ubi extract-files <query> <path-filter>`
 - `ubi download-game <query>`
 - `ubi run <install-directory>`
+- `ubi play <product-id>`
+- `ubi connect-profile ...`
+- `ubi connect-prefix clone ...`
 - `ubi connect-seed <install-directory>`
 - `ubi addons <title-or-id>`
 - `ubi doctor`
@@ -285,7 +288,30 @@ node dist/index.js run /games/splinter-cell \
 
 Credential entry, MFA, entitlement, initial download-state creation, and final verification remain inside Ubisoft Connect. The CLI never transfers its web session, submits desktop credentials, substitutes DLLs, or fabricates Connect registry/database state. `--runner-arg` is repeatable for runners that need arguments before the executable.
 
-### 14. Explore associated products / DLC-like entries
+### 14. Save a shared Connect prefix and use `ubi play`
+
+A single persistent Connect prefix is the safest way to reuse the official client's remembered authentication across games. Profiles store only non-secret product IDs and paths in an owner-only (`0600`) local file—never client tokens or credentials.
+
+```bash
+node dist/index.js connect-profile default ~/.local/share/ubi/prefixes/connect
+node dist/index.js connect-profile set 109 \
+  --install-dir /games/splinter-cell \
+  --executable system/SplinterCell.exe
+node dist/index.js play 109
+```
+
+`play` invokes the official product URI, waits for the profiled game process, and stops Connect after the game exits so its launcher/promotional UI is not left open. Use `--leave-connect-open` to opt out or `--dry-run` to inspect the command.
+
+A same-machine whole-prefix clone can preserve remembered authentication, including Wine DPAPI/device state, but Connect may rotate the refresh token when the clone starts and invalidate the source. Treat this as a **one-way migration**, not a parallel multi-prefix template. The guarded command requires explicit sensitive-state acknowledgement, defaults to reflink-only cloning, creates an owner-only (`0700`) target, and refuses to merge into an existing prefix:
+
+```bash
+node dist/index.js connect-prefix clone /old/prefix /new/prefix \
+  --include-auth --yes
+```
+
+Only one prefix in that authentication lineage should remain active. Prefer one shared persistent prefix instead of cloning.
+
+### 15. Explore associated products / DLC-like entries
 
 ```bash
 node dist/index.js addons 720 --limit 10
@@ -328,7 +354,7 @@ The current MVP can also experimentally reconstruct small batches of matching fi
 
 ### `ubi download-game 109 --dry-run`
 
-`download-game` can plan or reconstruct an owned game tree. Its default 10-file / 1-GiB bound, output-path containment checks, free-space preflight, atomic file publication, interrupt handling, and manifest-bound SHA-256 resume state make it suitable for controlled reconstruction runs. It deliberately requires `--all --yes` to opt into a whole manifest. URL lookup uses each slice hash's deterministic CDN prefix rather than probing all 32 prefixes; a live 5,320-file / 2.55-GB Splinter Cell run completed in 5m49s, and a full verified resume pass took 14s with zero downloaded bytes.[19]
+`download-game` can plan or reconstruct an owned game tree. Its default 10-file / 1-GiB bound, output-path containment checks, free-space preflight, atomic file publication, interrupt handling, and manifest-bound SHA-256 resume state make it suitable for controlled reconstruction runs. It deliberately requires `--all --yes` to opt into a whole manifest. URL lookup uses each slice hash's deterministic CDN prefix rather than probing all 32 prefixes; a clean-cache 5,320-file / 2.55-GB Splinter Cell run completed in 2m55s, and a full verified resume pass took 10s with zero downloaded bytes.[19]
 
 ## Architecture overview
 
@@ -366,7 +392,7 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 4. The CLI can now parse live `.manifest`, `.metadata`, and `.licenses` assets, download raw slice blobs, persist raw slice cache entries, and experimentally reconstruct some individual files, small matching file batches, or even a full game tree over multiple runs, but it still does **not** provide a launcher-grade install/update engine.[3][5][19]
 5. Download-service asset and slice exposure still varies by title, entitlement row, compression format, and file path; the current implementation gracefully handles missing live `.metadata`/`.licenses` URLs, but `extract-file`, `extract-files`, and `download-game` remain experimental rather than universally reliable for every manifest path or title.[4][5][19]
 6. Long-running full-game runs can still surface upstream service instability or title-specific formats. Deterministic slice paths made the validated 2.55-GB run fit comfortably within the observed signed-URL lifetime, while 403 refresh remains a fallback. The CLI performs bounded preflight by default and supports interrupt-driven cancellation, but it is not a launcher-grade installer or updater.[19]
-7. `ubi run` can bootstrap/start a pinned official Ubisoft Connect build and launch an installed product through the registered `uplay://` protocol; `connect-seed` can populate a paused official download without modifying client state. First client authentication/MFA, initial official download-state creation, and final Connect verification remain interactive. Controller mappings and per-game runtime settings are also out of scope.
+7. `ubi run` can bootstrap/start a pinned official Ubisoft Connect build; `connect-seed` can populate a paused official download without modifying client state; and profiled `ubi play` can launch through `uplay://`, monitor the game, and close Connect afterward. First client authentication/MFA and initial official download-state creation remain interactive. Authenticated prefix cloning is migration-only because token rotation can invalidate the source. Controller mappings and per-game runtime settings remain out of scope.
 8. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
 
 ## Roadmap

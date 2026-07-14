@@ -43,6 +43,9 @@ describe('cli smoke test', () => {
     expect(stdout).toContain('extract-files');
     expect(stdout).toContain('download-game');
     expect(stdout).toContain('run');
+    expect(stdout).toContain('play');
+    expect(stdout).toContain('connect-prefix');
+    expect(stdout).toContain('connect-profile');
     expect(stdout).toContain('connect-seed');
   }, 120_000);
 
@@ -82,5 +85,19 @@ describe('cli smoke test', () => {
     expect(seedHelp).toContain('--yes');
     expect(seedHelp).toContain('--finalize');
     expect(seedHelp).toContain('--launch');
+
+    const cloneHelp = await run('node', [
+      'dist/index.js',
+      'connect-prefix',
+      'clone',
+      '--help'
+    ]);
+    expect(cloneHelp).toContain('--include-auth');
+    expect(cloneHelp).toContain('--yes');
+    expect(cloneHelp).toContain('--allow-full-copy');
+
+    const playHelp = await run('node', ['dist/index.js', 'play', '--help']);
+    expect(playHelp).toContain('--dry-run');
+    expect(playHelp).toContain('--leave-connect-open');
   }, 120_000);
 });

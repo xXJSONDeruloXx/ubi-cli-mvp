@@ -1,5 +1,12 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  symlink,
+  writeFile
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -7,7 +14,9 @@ import {
   buildWineProcessSpec,
   findUbisoftConnectExecutable,
   prepareWinePrefix,
-  verifyUbisoftConnectInstaller
+  stopUbisoftConnect,
+  verifyUbisoftConnectInstaller,
+  waitForWineProcessLifecycle
 } from '../src/services/ubisoft-connect';
 
 function makeSignedPeFixture(): Buffer {
@@ -55,6 +64,31 @@ describe('Ubisoft Connect bootstrap helpers', () => {
     const linkedPrefix = path.join(root, 'linked-prefix');
     await symlink(prefix, linkedPrefix);
     await expect(prepareWinePrefix(linkedPrefix)).rejects.toThrow(/symlink/);
+  });
+
+  it('tracks a game lifecycle and can stop the background client', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ubi-connect-'));
+    const runner = path.join(root, 'runner');
+    const count = path.join(root, 'count');
+    const stopped = path.join(root, 'stopped');
+    await writeFile(count, '0');
+    await writeFile(
+      runner,
+      `#!/bin/sh\nif [ "$1" = tasklist ]; then n=$(cat ${JSON.stringify(count)}); n=$((n+1)); echo "$n" > ${JSON.stringify(count)}; if [ "$n" -ge 2 ] && [ "$n" -le 4 ]; then echo Game.exe; fi; elif [ "$1" = taskkill ]; then echo "$*" > ${JSON.stringify(stopped)}; fi\n`
+    );
+    await chmod(runner, 0o700);
+
+    await expect(
+      waitForWineProcessLifecycle(runner, [], root, 'Game.exe', {
+        startTimeoutMs: 500,
+        absentSettleMs: 15,
+        pollIntervalMs: 5
+      })
+    ).resolves.toBeUndefined();
+    await stopUbisoftConnect(runner, [], root);
+    await expect(readFile(stopped, 'utf8')).resolves.toContain(
+      'taskkill /IM upc.exe'
+    );
   });
 
   it('discovers the standard client path and builds a contained process spec', async () => {

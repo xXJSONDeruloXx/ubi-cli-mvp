@@ -5,6 +5,8 @@ import { Command } from 'commander';
 import { registerAddonsCommand } from './cli/addons';
 import { registerAuthCommands } from './cli/auth';
 import { registerConfigCommand } from './cli/config-show';
+import { registerConnectPrefixCommands } from './cli/connect-prefix';
+import { registerConnectProfileCommands } from './cli/connect-profile';
 import { registerConnectSeedCommand } from './cli/connect-seed';
 import { createCliContext } from './cli/context';
 import { registerDoctorCommand } from './cli/doctor';
@@ -50,6 +52,8 @@ async function main(): Promise<void> {
   registerDownloadSlicesCommand(program, makeContext);
   registerExtractFileCommand(program, makeContext);
   registerRunCommand(program);
+  registerConnectPrefixCommands(program);
+  registerConnectProfileCommands(program);
   registerConnectSeedCommand(program);
   registerAddonsCommand(program, makeContext);
   registerDoctorCommand(program, makeContext);

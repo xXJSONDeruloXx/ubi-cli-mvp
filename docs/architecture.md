@@ -53,6 +53,8 @@ Current modules:
 - `public-catalog-service.ts`: fetch/cache `UplayManifests` datasets and build searchable config/title indexes.[11][12][13][14][15]
 - `ubisoft-connect.ts`: validate/cache the pinned official client installer, prepare explicit user-owned Wine prefixes, discover/start Connect, and run Wine-compatible child processes.
 - `connect-seed.ts`: discover client-owned paused-download staging, enforce process/path/symlink safeguards, hash-compare reconstructed payloads, and atomically seed only mismatched staged files without modifying Connect metadata.
+- `connect-profiles.ts`: atomically persist only non-secret product/source/prefix mappings in an owner-only local store.
+- `connect-prefix.ts`: guarded same-machine prefix migration with explicit authentication-state acknowledgement, owner-only targets, no symlink dereference, and reflink-only defaults.
 
 ### `src/models/`
 
@@ -186,6 +188,7 @@ Current modules include:
 2. Discover Connect or, with `--ensure-connect --yes`, download the exact pinned installer from its constrained official HTTPS endpoint and validate SHA-256 plus PE certificate-table structure before execution.
 3. Keep first credential/MFA entry in the official client UI; never transfer the CLI web session.
 4. After official install finalization, invoke `uplay://launch/<productId>/0` when `--connect-product-id` is supplied, allowing Connect to perform its normal launch/entitlement path without a Play-button click.
+5. `connect-profile` stores non-secret product/prefix paths, and `play <productId>` resolves that profile, invokes the URI, monitors the profiled game process through Wine, then stops Connect after game exit to avoid residual launcher/promotional UI.
 
 ### Public/fallback manifest path
 
@@ -224,6 +227,8 @@ Files:
 - `session.json`: persisted session metadata and tickets (redacted in logs)
 - `cache/*.json`: cached public dataset snapshots from `UplayManifests`
 - `cache/demux-slices/*.slice`: cached raw Demux slice payloads keyed by slice hash
+- `connect-profiles.json`: mode-0600 non-secret product/source/prefix mappings for `ubi play`
+- user-selected Wine prefixes: contain sensitive official-client remembered authentication and must remain owner-only; they are never stored in the repository
 - `debug/*`: optional raw manifest and Demux-related artifacts written during inspection flows
 
 ## Current blocker frontier
@@ -236,4 +241,5 @@ The remaining frontier is the gap between **raw manifest/slice retrieval** and a
 - not every entitlement row exposes a usable `latestManifest`
 - complete reconstruction plus Connect staging/finalization is validated for one owned legacy title/build, but other titles may use different payload, staging, prerequisite, or registration semantics
 - first-time Connect authentication/MFA and one official Download initiation remain interactive because no supported unattended credential or install-initiation API has been established
+- one persistent shared prefix safely reuses remembered authentication; whole-prefix cloning works on the same machine but token rotation makes it a one-way migration rather than a parallel template
 - update/repair orchestration and automatic product-ID/profile selection remain incomplete
