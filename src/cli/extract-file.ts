@@ -232,6 +232,11 @@ export function registerExtractFileCommand(
       'Number of manifest files to reconstruct concurrently',
       '4'
     )
+    .option(
+      '--slice-workers <n>',
+      'Maximum slices prefetched concurrently per file',
+      '4'
+    )
     .action(
       async (
         query: string,
@@ -239,6 +244,7 @@ export function registerExtractFileCommand(
           json?: boolean;
           outputDir?: string;
           workers?: string;
+          sliceWorkers?: string;
           limit?: string;
           maxInstallBytes?: string;
           all?: boolean;
@@ -270,6 +276,12 @@ export function registerExtractFileCommand(
             1,
             8
           );
+          const slicePrefetchCount = parseBoundedInteger(
+            options.sliceWorkers ?? '4',
+            '--slice-workers',
+            1,
+            8
+          );
           const fileLimit = parseBoundedInteger(
             options.limit ?? '10',
             '--limit',
@@ -287,6 +299,7 @@ export function registerExtractFileCommand(
           const info = await demuxService.downloadGame(query, {
             outputDir: options.outputDir,
             workerCount,
+            slicePrefetchCount,
             fileLimit,
             maxInstallBytes,
             allowAll: options.all,

@@ -1,10 +1,126 @@
 import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { deflateSync, zstdCompressSync } from 'node:zlib';
-import { describe, expect, it } from 'vitest';
+import { deflateRawSync, deflateSync, zstdCompressSync } from 'node:zlib';
+import { describe, expect, it, vi } from 'vitest';
 import { DemuxService } from '../src/services/demux-service';
 
 describe('demux service', () => {
+  function launcherlessService(options?: {
+    owned?: boolean;
+    uplayId?: number;
+    ticket?: string;
+  }): {
+    service: DemuxService;
+    getUplayPcTicket: ReturnType<typeof vi.fn>;
+  } {
+    const getUplayPcTicket = vi
+      .fn()
+      .mockResolvedValue(
+        options?.ticket === undefined ? 'issued-game-ticket' : options.ticket
+      );
+    const service = new DemuxService(
+      {
+        debugDir: '/tmp',
+        sessionFile: '/tmp/session.json'
+      } as never,
+      {} as never,
+      {
+        child: () => ({ child: () => undefined, debug: () => undefined }),
+        debug: () => undefined
+      } as never,
+      {
+        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+      } as never,
+      undefined,
+      {
+        ensureValidSession: () =>
+          Promise.resolve({
+            ticket: 'account-ticket',
+            sessionId: 'session',
+            userId: 'user-id',
+            profileId: 'profile-id',
+            nameOnPlatform: 'Player',
+            email: 'player@example.test'
+          })
+      } as never,
+      {
+        listOwnedGames: () =>
+          Promise.resolve([
+            {
+              productId: 109,
+              owned: options?.owned ?? true,
+              state: 3,
+              productType: 0,
+              configuration: 'root:\n  name: Splinter Cell\n',
+              uplayId: options?.uplayId ?? 77
+            }
+          ]),
+        getUplayPcTicket
+      } as never,
+      {
+        requestRaw: () =>
+          Promise.resolve({ status: 200, body: Buffer.from('') })
+      } as never
+    );
+    return { service, getUplayPcTicket };
+  }
+
+  it('requires ownership and a real per-game ticket for launcherless profiles', async () => {
+    const { service, getUplayPcTicket } = launcherlessService();
+
+    await expect(
+      service.resolveLauncherlessAccount('109')
+    ).resolves.toMatchObject({
+      game: { demuxProductId: 109, owned: true },
+      userId: 'profile-id',
+      username: 'Player',
+      email: 'player@example.test',
+      uplayPcTicket: 'issued-game-ticket',
+      appId: 77,
+      ticketSource: 'ubisoft',
+      profilePassword: 'UBI_CLI_AUTHENTICATED'
+    });
+    expect(getUplayPcTicket).toHaveBeenCalledWith(
+      expect.objectContaining({ ticket: 'account-ticket' }),
+      77
+    );
+  });
+
+  it('rejects launcherless setup when Ubisoft issues no game ticket', async () => {
+    const { service } = launcherlessService({ ticket: '' });
+
+    await expect(service.resolveLauncherlessAccount('109')).rejects.toThrow(
+      /--allow-local-ticket/
+    );
+  });
+
+  it('permits a local shim marker only after explicit opt-in and live ownership', async () => {
+    const { service, getUplayPcTicket } = launcherlessService({
+      uplayId: 0,
+      ticket: ''
+    });
+
+    await expect(
+      service.resolveLauncherlessAccount('109', true)
+    ).resolves.toMatchObject({
+      appId: 109,
+      uplayPcTicket: 'UBI_CLI_OWNED_109',
+      ticketSource: 'local-owned-assertion'
+    });
+    expect(getUplayPcTicket).not.toHaveBeenCalled();
+  });
+
+  it('rejects launcherless setup for an unowned product', async () => {
+    const { service, getUplayPcTicket } = launcherlessService({ owned: false });
+
+    await expect(service.resolveLauncherlessAccount('109')).rejects.toThrow(
+      /is not owned/
+    );
+    expect(getUplayPcTicket).not.toHaveBeenCalled();
+  });
+
   it('normalizes owned games and maps public product ids by app id', async () => {
     const service = new DemuxService(
       {
@@ -42,6 +158,7 @@ describe('demux service', () => {
               productAssociations: [1018],
               configuration: `version: 2\nroot:\n  name: For Honor\n  installer:\n    publisher: Ubisoft\n  uplay:\n    game_code: FORHONOR\n`,
               ubiservicesAppId: 'app-1',
+              uplayId: 77,
               latestManifest: ' HASH ',
               activeBranchId: 2,
               availableBranches: [
@@ -64,6 +181,7 @@ describe('demux service', () => {
       demuxProductId: 2916,
       publicProductId: 569,
       latestManifest: 'HASH',
+      uplayId: 77,
       hasDownloadManifest: true,
       gameCode: 'FORHONOR'
     });
@@ -123,6 +241,7 @@ describe('demux service', () => {
   });
 
   it('derives slice URLs from a parsed live manifest', async () => {
+    const requestedPaths: string[] = [];
     const service = new DemuxService(
       {
         debugDir: '/tmp',
@@ -152,7 +271,8 @@ describe('demux service', () => {
           _session: unknown,
           _productId: number,
           relativePaths: string[]
-        ) =>
+        ) => (
+          requestedPaths.push(...relativePaths),
           Promise.resolve({
             ownershipTokenExpiresAt: '1774300461',
             responses: relativePaths
@@ -169,6 +289,7 @@ describe('demux service', () => {
                 urls: [`https://example.test/${relativePath}`]
               }))
           })
+        )
       } as never,
       {
         requestRaw: () =>
@@ -213,6 +334,9 @@ describe('demux service', () => {
     });
     expect(info.urls[0]?.relativePath).toBe(
       'slices_v3/e/8E5F678ECDBBA7EF59483BABB9A6282196C8A90E'
+    );
+    expect(requestedPaths).toContain(
+      'slices/8E5F678ECDBBA7EF59483BABB9A6282196C8A90E'
     );
   });
 
@@ -405,6 +529,8 @@ describe('demux service', () => {
   it('experimentally reconstructs a manifest file by downloading and stitching decompressed slices', async () => {
     const firstSliceCompressed = zstdCompressSync(Buffer.from('Hello '));
     const secondSliceCompressed = zstdCompressSync(Buffer.from('World'));
+    let activeRequests = 0;
+    let maximumActiveRequests = 0;
     const service = new DemuxService(
       {
         debugDir: '/tmp',
@@ -444,13 +570,21 @@ describe('demux service', () => {
           })
       } as never,
       {
-        requestRaw: (url: string) =>
-          Promise.resolve({
+        requestRaw: async (url: string) => {
+          activeRequests += 1;
+          maximumActiveRequests = Math.max(
+            maximumActiveRequests,
+            activeRequests
+          );
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          activeRequests -= 1;
+          return {
             status: 200,
             body: url.includes('665A69EDD249A5DE013007219DFAE260C0053112')
               ? firstSliceCompressed
               : secondSliceCompressed
-          })
+          };
+        }
       } as never
     );
 
@@ -520,104 +654,127 @@ describe('demux service', () => {
       bytesWritten: 11
     });
     expect(reconstructed).toBe('Hello World');
+    expect(maximumActiveRequests).toBe(2);
   });
 
-  it('decompresses zlib-framed slice payloads for older manifests', async () => {
-    const compressedSlice = deflateSync(Buffer.from('legacy payload'));
-    const service = new DemuxService(
-      {
-        debugDir: '/tmp',
-        sessionFile: '/tmp/session.json'
-      } as never,
-      {} as never,
-      {
-        child: () => ({ child: () => undefined, debug: () => undefined }),
-        debug: () => undefined
-      } as never,
-      {
-        findCatalogProductBySpaceId: () => Promise.resolve(undefined),
-        findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
-        findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
-      } as never,
-      undefined,
-      {
-        ensureValidSession: () =>
-          Promise.resolve({
-            ticket: 'ticket',
-            sessionId: 'session',
-            userId: 'user'
-          })
-      } as never,
-      {
-        getDownloadUrlsForRelativePaths: (
-          _session: unknown,
-          _productId: number,
-          relativePaths: string[]
-        ) =>
-          Promise.resolve({
-            responses: relativePaths.map((relativePath) => ({
-              result: 0,
-              relativePath,
-              urls: [`https://example.test/${relativePath}`]
-            }))
-          })
-      } as never,
-      {
-        requestRaw: () =>
-          Promise.resolve({
-            status: 200,
-            body: compressedSlice
-          })
-      } as never
-    );
+  it.each([
+    ['zlib-framed', deflateSync(Buffer.from('legacy payload'))],
+    ['raw-deflate', deflateRawSync(Buffer.from('legacy payload'))]
+  ])(
+    'decompresses %s slice payloads for older manifests',
+    async (_name, compressedSlice) => {
+      const service = new DemuxService(
+        {
+          debugDir: '/tmp',
+          sessionFile: '/tmp/session.json'
+        } as never,
+        {} as never,
+        {
+          child: () => ({ child: () => undefined, debug: () => undefined }),
+          debug: () => undefined
+        } as never,
+        {
+          findCatalogProductBySpaceId: () => Promise.resolve(undefined),
+          findUniqueCatalogProductByAppId: () => Promise.resolve(undefined),
+          findUniqueCatalogProductByTitle: () => Promise.resolve(undefined)
+        } as never,
+        undefined,
+        {
+          ensureValidSession: () =>
+            Promise.resolve({
+              ticket: 'ticket',
+              sessionId: 'session',
+              userId: 'user'
+            })
+        } as never,
+        {
+          getDownloadUrlsForRelativePaths: (
+            _session: unknown,
+            _productId: number,
+            relativePaths: string[]
+          ) =>
+            Promise.resolve({
+              responses: relativePaths.map((relativePath) => ({
+                result: 0,
+                relativePath,
+                urls: [`https://example.test/${relativePath}`]
+              }))
+            })
+        } as never,
+        {
+          requestRaw: () =>
+            Promise.resolve({
+              status: 200,
+              body: compressedSlice
+            })
+        } as never
+      );
 
-    Object.assign(service as object, {
-      parseLiveManifest: () =>
-        Promise.resolve({
-          download: {
-            game: {
-              title: "Tom Clancy's Splinter Cell",
-              demuxProductId: 109,
-              publicProductId: 109
+      Object.assign(service as object, {
+        parseLiveManifest: () =>
+          Promise.resolve({
+            download: {
+              game: {
+                title: "Tom Clancy's Splinter Cell",
+                demuxProductId: 109,
+                publicProductId: 109
+              },
+              manifestHash: 'LIVEHASH'
             },
-            manifestHash: 'LIVEHASH'
-          },
-          parsed: {
-            chunks: [
-              {
-                files: [
-                  {
-                    name: 'bin/legacy.txt',
-                    size: 14,
-                    isDir: false,
-                    sliceList: [
-                      {
-                        downloadSha1: Buffer.from(
-                          '1111111111111111111111111111111111111111',
-                          'hex'
-                        ),
-                        fileOffset: 0,
-                        size: 14
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-        })
-    });
+            parsed: {
+              chunks: [
+                {
+                  files: [
+                    {
+                      name: 'bin/legacy.txt',
+                      size: 14,
+                      isDir: false,
+                      sliceList: [
+                        {
+                          downloadSha1: Buffer.from(
+                            '1111111111111111111111111111111111111111',
+                            'hex'
+                          ),
+                          fileOffset: 0,
+                          size: 14
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          })
+      });
 
-    const result = await service.extractFile(
-      '109',
-      'bin/legacy.txt',
-      '/tmp/ubi-extract-test/legacy.txt'
-    );
+      const result = await service.extractFile(
+        '109',
+        'bin/legacy.txt',
+        '/tmp/ubi-extract-test/legacy.txt'
+      );
 
-    expect(result.bytesWritten).toBe(14);
-    expect(await readFile('/tmp/ubi-extract-test/legacy.txt', 'utf8')).toBe(
-      'legacy payload'
-    );
+      expect(result.bytesWritten).toBe(14);
+      expect(await readFile('/tmp/ubi-extract-test/legacy.txt', 'utf8')).toBe(
+        'legacy payload'
+      );
+    }
+  );
+
+  it('keeps an expected-size uncompressed slice with zlib-like leading bytes', () => {
+    const body = Buffer.from([0x78, 0x9c, 0x06, 0x00]);
+    const decompress = (
+      service: DemuxService,
+      value: Buffer,
+      expectedSize: number
+    ): Buffer =>
+      (
+        service as unknown as {
+          decompressSliceBody: (body: Buffer, size: number) => Buffer;
+        }
+      ).decompressSliceBody(value, expectedSize);
+    const { service } = launcherlessService();
+
+    expect(decompress(service, body, body.length)).toEqual(body);
   });
 
   it('falls back to sequential slice offsets when manifest slice fileOffset values are all zero defaults', async () => {

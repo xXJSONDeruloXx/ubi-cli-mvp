@@ -73,6 +73,71 @@ describe('run command executable resolution', () => {
     await expect(readFile(observedCwd, 'utf8')).resolves.toBe(`${systemDir}\n`);
   });
 
+  it('offers an opt-in UMU legacy compatibility launch without changing the default path', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ubi-run-'));
+    const binDir = path.join(root, 'bin');
+    const proton = path.join(root, 'proton');
+    const umu = path.join(root, 'umu-run');
+    const observed = path.join(root, 'umu.txt');
+    await mkdir(binDir);
+    await mkdir(proton);
+    await writeFile(path.join(binDir, 'game.exe'), 'test');
+    await writeFile(
+      umu,
+      `#!/bin/sh\nprintf '%s|%s|%s|%s|%s|%s|%s\n' "$PWD" "$GAMEID" "$STORE" "$PROTONPATH" "$WINE_CPU_TOPOLOGY" "$PROTON_DISABLE_NVAPI" "$*" > ${JSON.stringify(observed)}\n`
+    );
+    await chmod(umu, 0o700);
+
+    const program = new Command();
+    registerRunCommand(program);
+    await program.parseAsync([
+      'node',
+      'ubi',
+      'run',
+      root,
+      '--executable',
+      'bin/game.exe',
+      '--umu',
+      '--umu-command',
+      umu,
+      '--proton',
+      proton,
+      '--legacy-compat',
+      '--cpu-limit',
+      '2'
+    ]);
+
+    await expect(readFile(observed, 'utf8')).resolves.toBe(
+      `${root}|0|none|${proton}|2:0,1|1|${path.join(binDir, 'game.exe')}\n`
+    );
+  });
+
+  it('keeps UMU direct launch separate from the official Connect handoff', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ubi-run-'));
+    const umu = path.join(root, 'umu-run');
+    await writeFile(path.join(root, 'game.exe'), 'test');
+    await writeFile(umu, '#!/bin/sh\nexit 0\n');
+    await chmod(umu, 0o700);
+    const program = new Command();
+    registerRunCommand(program);
+
+    await expect(
+      program.parseAsync([
+        'node',
+        'ubi',
+        'run',
+        root,
+        '--umu',
+        '--umu-command',
+        umu,
+        '--connect',
+        '--wine-prefix',
+        path.join(root, 'prefix'),
+        '--dry-run'
+      ])
+    ).rejects.toThrow(/direct-launch compatibility path/);
+  });
+
   it('requires an explicit prefix before starting Connect', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'ubi-run-'));
     await writeFile(path.join(root, 'game.exe'), 'test');

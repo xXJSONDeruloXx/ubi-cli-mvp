@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   collectUniqueSliceHexHashes,
   collectUniqueSlicePaths,
+  isValidSliceToken,
+  normalizeManifestSliceList,
   sliceHexToCandidateRelativePaths,
+  sliceHexToDownloadRelativePaths,
   sliceHexToRelativePath,
   sliceTokenToHex,
   sliceTokenToRelativePath
@@ -64,5 +67,53 @@ describe('demux slice helpers', () => {
     expect(candidates.at(-1)).toBe(
       'slices_v3/v/AB7AEC6502718500BDB8EAA455FCF09D5E81EFE3'
     );
+  });
+
+  it('builds modern and legacy flat download paths', () => {
+    expect(
+      sliceHexToDownloadRelativePaths(
+        '8E5F678ECDBBA7EF59483BABB9A6282196C8A90E'
+      )
+    ).toEqual([
+      'slices_v3/e/8E5F678ECDBBA7EF59483BABB9A6282196C8A90E',
+      'slices/8E5F678ECDBBA7EF59483BABB9A6282196C8A90E'
+    ]);
+  });
+
+  it('ignores protobuf-default empty download hashes and falls back to file slices', () => {
+    const valid = Buffer.from(
+      '8E5F678ECDBBA7EF59483BABB9A6282196C8A90E',
+      'hex'
+    );
+    const parsed = {
+      chunks: [
+        {
+          files: [
+            {
+              slices: [valid],
+              sliceList: [{ downloadSha1: Buffer.alloc(0) }]
+            }
+          ]
+        }
+      ]
+    };
+
+    expect(collectUniqueSliceHexHashes(parsed)).toEqual([
+      '8E5F678ECDBBA7EF59483BABB9A6282196C8A90E'
+    ]);
+    expect(() => sliceTokenToHex(Buffer.alloc(0))).toThrow(
+      /expected 20 bytes, got 0/
+    );
+    expect(isValidSliceToken(Buffer.alloc(0))).toBe(false);
+    expect(isValidSliceToken(valid)).toBe(true);
+    expect(
+      normalizeManifestSliceList(undefined, [valid, Buffer.alloc(0)])
+    ).toEqual([{ downloadSha1: valid }]);
+    expect(
+      normalizeManifestSliceList(
+        [{ downloadSha1: Buffer.alloc(0), size: 7 }],
+        [valid]
+      )
+    ).toEqual([{ downloadSha1: valid, size: 7 }]);
   });
 });

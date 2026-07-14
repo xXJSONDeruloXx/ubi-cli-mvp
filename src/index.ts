@@ -19,6 +19,7 @@ import { registerExtractFileCommand } from './cli/extract-file';
 import { registerFilesCommand } from './cli/files';
 import { registerInfoCommand } from './cli/info';
 import { registerListCommand } from './cli/list';
+import { registerLauncherlessCommands } from './cli/launcherless';
 import { registerManifestCommand } from './cli/manifest';
 import { registerRunCommand } from './cli/run';
 import { registerSearchCommand } from './cli/search';
@@ -54,6 +55,7 @@ async function main(): Promise<void> {
   registerDownloadSlicesCommand(program, makeContext);
   registerExtractFileCommand(program, makeContext);
   registerRunCommand(program);
+  registerLauncherlessCommands(program, makeContext);
   registerConnectPrefixCommands(program);
   registerConnectProfileCommands(program);
   registerConnectSeedCommand(program);

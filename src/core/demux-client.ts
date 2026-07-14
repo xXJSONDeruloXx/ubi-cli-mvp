@@ -33,6 +33,7 @@ interface DemuxOwnedGamePayload {
   }>;
   ubiservicesSpaceId?: string;
   ubiservicesAppId?: string;
+  uplayId?: number;
   latestManifest?: string;
 }
 
@@ -52,6 +53,26 @@ interface DemuxOwnershipTokenResponse {
     ownershipTokenRsp?: {
       token?: string;
       expiration?: number | { toString(): string };
+    };
+  };
+}
+
+interface DemuxLatestManifestsResponse {
+  response?: {
+    deprecatedGetLatestManifestsRsp?: {
+      manifests?: Array<{
+        productId?: number;
+        manifest?: string;
+      }>;
+    };
+  };
+}
+
+interface DemuxUplayPcTicketResponse {
+  response?: {
+    getUplayPcTicketRsp?: {
+      success?: boolean;
+      uplayPcTicket?: string;
     };
   };
 }
@@ -172,7 +193,7 @@ function findAssetUrl(
 
 function extractRelativePathFromUrl(url: string): string | undefined {
   const pathname = normalizeUrlPathname(url);
-  const marker = ['/manifests/', '/slices_v3/'].find((value) =>
+  const marker = ['/manifests/', '/slices_v3/', '/slices/'].find((value) =>
     pathname.includes(value)
   );
   if (!marker) {
@@ -285,8 +306,59 @@ export class DemuxClient {
   ): Promise<DemuxOwnedGamePayload[]> {
     return this.withRetry('listOwnedGames', async () => {
       await this.initializeOwnership(session);
-      return this.cachedOwnedGames ?? [];
+      const games = this.cachedOwnedGames ?? [];
+      const missingProductIds = games
+        .filter((game) => !game.latestManifest?.trim())
+        .map((game) => game.productId);
+      if (missingProductIds.length === 0) {
+        return games;
+      }
+
+      try {
+        const manifests = await this.getLatestManifests(
+          session,
+          missingProductIds
+        );
+        for (const game of games) {
+          const inlineManifest = game.latestManifest?.trim();
+          game.latestManifest = inlineManifest || manifests.get(game.productId);
+        }
+      } catch (error) {
+        this.logger.debug('latest-manifest fallback was unavailable', {
+          productCount: missingProductIds.length,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+
+      return games;
     });
+  }
+
+  private async getLatestManifests(
+    session: StoredSession,
+    productIds: number[]
+  ): Promise<Map<number, string>> {
+    const ownership = await this.getOwnershipConnection(session);
+    const response = (await ownership.request({
+      request: {
+        requestId: 1,
+        deprecatedGetLatestManifestsReq: {
+          deprecatedProductIds: productIds,
+          deprecatedTestConfig: false
+        },
+        ubiTicket: session.ticket,
+        ubiSessionId: session.sessionId
+      }
+    })) as DemuxLatestManifestsResponse;
+
+    return new Map(
+      (response.response?.deprecatedGetLatestManifestsRsp?.manifests ?? [])
+        .filter(
+          (entry): entry is { productId: number; manifest: string } =>
+            Number.isInteger(entry.productId) && Boolean(entry.manifest?.trim())
+        )
+        .map((entry) => [entry.productId, entry.manifest.trim()])
+    );
   }
 
   public async getProductConfig(
@@ -309,6 +381,28 @@ export class DemuxClient {
       })) as DemuxProductConfigResponse;
 
       return response.response?.getProductConfigRsp?.configuration;
+    });
+  }
+
+  public async getUplayPcTicket(
+    session: StoredSession,
+    uplayId: number
+  ): Promise<string | undefined> {
+    return this.withRetry(`getUplayPcTicket:${uplayId}`, async () => {
+      await this.initializeOwnership(session);
+      const ownership = await this.getOwnershipConnection(session);
+      const response = (await ownership.request({
+        request: {
+          requestId: 1,
+          getUplayPcTicketReq: { uplayId },
+          ubiTicket: session.ticket,
+          ubiSessionId: session.sessionId
+        }
+      })) as DemuxUplayPcTicketResponse;
+      const ticket = response.response?.getUplayPcTicketRsp;
+      return ticket?.success && ticket.uplayPcTicket?.trim()
+        ? ticket.uplayPcTicket
+        : undefined;
     });
   }
 

@@ -57,6 +57,7 @@ export interface ProcessSpec {
   cwd: string;
   env: NodeJS.ProcessEnv;
   stdio?: 'inherit' | 'ignore';
+  processGroup?: boolean;
 }
 
 export interface InstallerVerification {
@@ -675,12 +676,37 @@ export async function runProcess(
   description: string
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
+    const useProcessGroup =
+      spec.processGroup === true && process.platform !== 'win32';
     const child = spawn(spec.command, spec.args, {
       cwd: spec.cwd,
       env: spec.env,
-      stdio: spec.stdio ?? 'inherit'
+      stdio: spec.stdio ?? 'inherit',
+      detached: useProcessGroup
     });
+    let forwardedSignal: NodeJS.Signals | undefined;
+    const forwardSignal = (signal: NodeJS.Signals): void => {
+      forwardedSignal = signal;
+      try {
+        if (useProcessGroup && child.pid) {
+          process.kill(-child.pid, signal);
+        } else {
+          child.kill(signal);
+        }
+      } catch {
+        // The child may have exited between signal delivery and forwarding.
+      }
+    };
+    const onSigint = (): void => forwardSignal('SIGINT');
+    const onSigterm = (): void => forwardSignal('SIGTERM');
+    const cleanupSignalHandlers = (): void => {
+      process.off('SIGINT', onSigint);
+      process.off('SIGTERM', onSigterm);
+    };
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
     child.once('error', (error) => {
+      cleanupSignalHandlers();
       reject(
         new UserFacingError(
           `Could not start ${description} with ${spec.command}: ${error.message}`
@@ -688,6 +714,22 @@ export async function runProcess(
       );
     });
     child.once('exit', (code, signal) => {
+      cleanupSignalHandlers();
+      if (forwardedSignal) {
+        if (useProcessGroup && child.pid) {
+          try {
+            process.kill(-child.pid, 'SIGTERM');
+          } catch {
+            // The process group already exited cleanly.
+          }
+        }
+        reject(
+          new UserFacingError(
+            `${description} was interrupted by ${forwardedSignal}.`
+          )
+        );
+        return;
+      }
       if (code === 0) {
         resolve();
         return;

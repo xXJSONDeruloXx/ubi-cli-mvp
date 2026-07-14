@@ -269,10 +269,12 @@ node dist/index.js extract-files 3539 'Support\\Readme' --prefix --limit 3 --out
 ```bash
 node dist/index.js download-game 3539 --dry-run
 node dist/index.js download-game 3539 --limit 5 --max-install-bytes 524288000 --output-dir /tmp/ubi-game
-node dist/index.js download-game 109 --all --yes --output-dir /games/splinter-cell
+node dist/index.js download-game 109 --all --yes --slice-workers 4 --output-dir /games/splinter-cell
 ```
 
-Completed files are recorded in a manifest-bound, SHA-256-verified local resume state. Use `--restart` only when deliberately replacing incompatible state. In live validation, an owned 5,320-file / 2.55-GB Splinter Cell tree first completed in 5m49s after deterministic CDN-path optimization. A later clean-cache run completed in 2m55s with 5,844 network fetches, zero cache hits, and zero URL refreshes; a second pass SHA-256-verified every output in 10s with zero network transfer.
+Completed files are recorded in a manifest-bound, SHA-256-verified local resume state. Use `--restart` only when deliberately replacing incompatible state. `--slice-workers` bounds rolling per-file slice prefetch to 1–8 (default 4), independently of file-level `--workers`. Slice URL resolution supports both current bucketed `slices_v3/<bucket>/<hash>` and legacy flat `slices/<hash>` layouts; extraction accepts zstd, zlib-framed deflate, raw deflate, and already-uncompressed payloads while retaining manifest size/hash checks. Owned rows missing an inline manifest hash use the ownership service's latest-manifest fallback. These compatibility additions are covered by synthetic protocol and real file-reconstruction tests. Live legacy-manifest validation reconstructed and zero-network verified complete Assassin's Creed Chronicles India (974 files / 4.17 GB) and China (679 files / 3.62 GB) trees.
+
+Before these compatibility additions, live validation of the modern layout completed an owned 5,320-file / 2.55-GB Splinter Cell tree in 2m55s with 5,844 network fetches, zero cache hits, and zero URL refreshes; a second pass SHA-256-verified every output in 10s with zero network transfer.
 
 ### 13. Launch a reconstructed Windows game
 
@@ -282,6 +284,40 @@ On Linux, `run` uses `wine` by default; on Windows it launches the selected exec
 node dist/index.js run /games/splinter-cell --dry-run
 node dist/index.js run /games/splinter-cell --executable system/SplinterCell.exe
 ```
+
+An optional direct-launch path discovers `umu-run` from `PATH` (or accepts an explicit executable), can set an explicit Proton directory, and can enable narrowly scoped legacy tuning. It does not install replacement Ubisoft DLLs, assert ownership, fabricate tickets, import signing certificates, or make a title launcherless when that title requires Connect/DRM services.
+
+```bash
+node dist/index.js run /games/legacy-title \
+  --executable bin/game.exe \
+  --umu --proton ~/.local/share/Steam/compatibilitytools.d/GE-Proton \
+  --legacy-compat --cpu-limit 4
+```
+
+`--legacy-compat` disables NvAPI and exposes a bounded CPU topology, two common Proton workarounds for older games. It also uses the install root as the working directory except for executables in a `System` directory. The UMU direct-launch backend is explicit and separate from `--connect`; use the official Connect path below for entitlement, cloud, DLC, online, overlay, or modern DRM behavior.
+
+For supported owned legacy Uplay R1/Orbit R2 titles, the separate `launcherless` command can replace folder-local loader DLLs from an explicitly supplied external shim bundle and run without starting Ubisoft Connect. Always inspect the hashes and paths first:
+
+```bash
+node dist/index.js launcherless run 109 /games/splinter-cell \
+  --executable system/SplinterCell.exe \
+  --shim-dir ../Optima/drm \
+  --allow-local-ticket --dry-run --json
+
+node dist/index.js launcherless run 109 /games/splinter-cell \
+  --executable system/SplinterCell.exe \
+  --shim-dir ../Optima/drm \
+  --allow-local-ticket --proton ~/.local/share/Steam/compatibilitytools.d/GE-Proton \
+  --yes
+```
+
+For a title with a real nonzero Uplay ID, such as the validated owned product 1847 path, omit `--allow-local-ticket`; the command requires and injects the Ubisoft-issued per-game ticket instead.
+
+This backend rechecks live Ubisoft ownership, requests a real per-game Uplay ticket when the entitlement exposes a Uplay ID, and otherwise refuses unless `--allow-local-ticket` explicitly enables the legacy shim's local ownership marker. It never retains the Ubisoft password: the official session API consumes it only during login, and the game-facing password field receives a non-secret authenticated-session marker because these shims return but do not validate that field. Temporary identity/ticket profiles are mode-0600 and hash-verified away after the process. Native and Wow64 install paths are added only to the dedicated launcherless Wine prefix.
+
+Loader deployment is hash-recorded and reversible. Existing DLLs are renamed to `.ubi-original`, native game-supplied EAX is preserved, and originals are restored automatically after a normal game exit so later official Connect launches keep their full behavior. `--keep-shims` explicitly leaves them deployed; `launcherless restore <installDir>` verifies both shim and backup hashes before recovery or manual restoration. No signing key or certificate is read or trusted. The official Connect commands and prefix remain available and unchanged; use those for online services, cloud synchronization, overlay, DLC initialization, modern DRM, or titles outside the tested legacy loader surface.
+
+Repeat `--game-arg <argument>` for title-specific flags that belong after the executable, such as `--game-arg=-windowed`; arguments are passed literally without shell evaluation and are included in dry-run output.
 
 For Ubisoft Store builds that require the desktop client, use an explicit prefix. `--connect` starts the official client and pauses for the user to complete its first authentication. `--ensure-connect --yes` may download and silently install a pinned official installer; `--connect-installer` accepts the same pinned file for offline reuse. The CLI verifies the exact SHA-256 and PE Authenticode certificate-table structure before execution.
 
@@ -395,7 +431,7 @@ The current MVP can also experimentally reconstruct small batches of matching fi
 
 ### `ubi download-game 109 --dry-run`
 
-`download-game` can plan or reconstruct an owned game tree. Its default 10-file / 1-GiB bound, output-path containment checks, free-space preflight, atomic file publication, interrupt handling, and manifest-bound SHA-256 resume state make it suitable for controlled reconstruction runs. It deliberately requires `--all --yes` to opt into a whole manifest. URL lookup uses each slice hash's deterministic CDN prefix rather than probing all 32 prefixes; a clean-cache 5,320-file / 2.55-GB Splinter Cell run completed in 2m55s, and a full verified resume pass took 10s with zero downloaded bytes.[19]
+`download-game` can plan or reconstruct an owned game tree. Its default 10-file / 1-GiB bound, output-path containment checks, free-space preflight, atomic file publication, interrupt handling, and manifest-bound SHA-256 resume state make it suitable for controlled reconstruction runs. It deliberately requires `--all --yes` to opt into a whole manifest. URL lookup requests the deterministic modern CDN path plus the legacy flat path for each hash rather than probing all 32 modern prefixes. The pre-compatibility modern-layout baseline completed a clean-cache 5,320-file / 2.55-GB Splinter Cell run in 2m55s, and a full verified resume pass took 10s with zero downloaded bytes.[19]
 
 ## Architecture overview
 
@@ -437,7 +473,7 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 4. The CLI can now parse live `.manifest`, `.metadata`, and `.licenses` assets, download raw slice blobs, persist raw slice cache entries, and experimentally reconstruct some individual files, small matching file batches, or even a full game tree over multiple runs, but it still does **not** provide a launcher-grade install/update engine.[3][5][19]
 5. Download-service asset and slice exposure still varies by title, entitlement row, compression format, and file path; the current implementation gracefully handles missing live `.metadata`/`.licenses` URLs, but `extract-file`, `extract-files`, and `download-game` remain experimental rather than universally reliable for every manifest path or title.[4][5][19]
 6. Long-running full-game runs can still surface upstream service instability or title-specific formats. Deterministic slice paths made the validated 2.55-GB run fit comfortably within the observed signed-URL lifetime, while 403 refresh remains a fallback. The CLI performs bounded preflight by default and supports interrupt-driven cancellation, but it is not a launcher-grade installer or updater.[19]
-7. `ubi run` can bootstrap/start a pinned official Ubisoft Connect build; `connect-prefix migrate-auth` can one-way reuse an official remembered login; `connect-seed` can populate client-owned staging without fabricating registration; and profiled `ubi play` can launch through `uplay://`, monitor the game, and close Connect afterward. The first-ever desktop authentication/MFA and each never-initialized product's official language/options/EULA/registration flow remain Connect operations. A reconstructed tree cannot safely register itself immediately. Controller mappings and per-game runtime settings remain out of scope.
+7. `ubi run` can bootstrap/start a pinned official Ubisoft Connect build; `connect-prefix migrate-auth` can one-way reuse an official remembered login; `connect-seed` can populate client-owned staging without fabricating registration; and profiled `ubi play` can launch through `uplay://`, monitor the game, and close Connect afterward. Separately, `ubi launcherless` can reach the validated legacy Splinter Cell main menu with working input and no Connect, and its real-ticket path has started Assassin's Creed Chronicles India without a Connect process. Its R1/Orbit loader surface and title-specific Proton/display behavior are not equivalent to official online/DRM support; Splinter Cell currently needs Xalia for input, whose independent helper window appears as a temporary corner black square. The first-ever desktop authentication/MFA and each never-initialized product's official language/options/EULA/registration flow remain Connect operations. A reconstructed tree cannot safely register itself immediately. Controller mappings and broader per-game runtime settings remain out of scope.
 8. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
 
 ## Roadmap

@@ -1,4 +1,5 @@
-import { opendir, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, opendir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -79,6 +80,72 @@ function defaultRunner(): string | undefined {
   return process.platform === 'win32' ? undefined : 'wine';
 }
 
+async function findCommandOnPath(command: string): Promise<string | undefined> {
+  for (const directory of (process.env.PATH ?? '').split(path.delimiter)) {
+    if (!directory) {
+      continue;
+    }
+    const candidate = path.join(directory, command);
+    try {
+      await access(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep searching PATH.
+    }
+  }
+  return undefined;
+}
+
+export async function resolveUmuCommand(
+  requestedCommand?: string
+): Promise<string> {
+  if (requestedCommand) {
+    if (requestedCommand.includes(path.sep)) {
+      const resolved = path.resolve(requestedCommand);
+      await access(resolved, constants.X_OK).catch(() => {
+        throw new UserFacingError(`UMU command is not executable: ${resolved}`);
+      });
+      return resolved;
+    }
+    return requestedCommand;
+  }
+
+  const discovered = await findCommandOnPath('umu-run');
+  if (!discovered) {
+    throw new UserFacingError(
+      'umu-run was not found on PATH. Install umu-launcher or provide --umu-command <path>.'
+    );
+  }
+  return discovered;
+}
+
+export function legacyCompatibilityEnvironment(
+  cpuLimit = 4
+): NodeJS.ProcessEnv {
+  return {
+    PROTON_DISABLE_NVAPI: '1',
+    DXVK_ENABLE_NVAPI: '0',
+    ...(cpuLimit > 0
+      ? {
+          WINE_CPU_TOPOLOGY: `${cpuLimit}:${Array.from(
+            { length: cpuLimit },
+            (_, index) => index
+          ).join(',')}`
+        }
+      : {})
+  };
+}
+
+function legacyWorkingDirectory(
+  installDir: string,
+  executable: string
+): string {
+  const executableDirectory = path.dirname(executable);
+  return path.basename(executableDirectory).toLowerCase() === 'system'
+    ? executableDirectory
+    : path.resolve(installDir);
+}
+
 function collectRunnerArgument(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
@@ -87,6 +154,11 @@ interface RunOptions {
   executable?: string;
   runner?: string;
   runnerArg: string[];
+  umu?: boolean;
+  umuCommand?: string;
+  proton?: string;
+  legacyCompat?: boolean;
+  cpuLimit?: string;
   winePrefix?: string;
   connect?: boolean;
   ensureConnect?: boolean;
@@ -99,6 +171,28 @@ interface RunOptions {
 
 function validateConnectOptions(options: RunOptions, runner?: string): void {
   const useConnect = options.connect || options.ensureConnect;
+  if (options.umuCommand && !options.umu) {
+    throw new UserFacingError('--umu-command requires --umu.');
+  }
+  if (options.proton && !options.umu) {
+    throw new UserFacingError('--proton requires --umu.');
+  }
+  if (options.umu && options.runner) {
+    throw new UserFacingError('--umu and --runner cannot be combined.');
+  }
+  if (options.umu && useConnect) {
+    throw new UserFacingError(
+      '--umu is a direct-launch compatibility path and cannot be combined with the official Connect handoff.'
+    );
+  }
+  if (options.cpuLimit && !options.legacyCompat) {
+    throw new UserFacingError('--cpu-limit requires --legacy-compat.');
+  }
+  if (options.legacyCompat && !runner) {
+    throw new UserFacingError(
+      '--legacy-compat requires a Wine/Proton-compatible runner.'
+    );
+  }
   if (options.connectReady && !useConnect) {
     throw new UserFacingError(
       '--connect-ready requires --connect or --ensure-connect.'
@@ -168,12 +262,17 @@ function emitDryRun(
   prefix: string | undefined,
   connectExecutable: string | undefined,
   useConnect: boolean,
-  connectProductId?: string
+  connectProductId?: string,
+  gameCwd = path.dirname(executable),
+  gameEnvironment: NodeJS.ProcessEnv = {}
 ): void {
   process.stdout.write(
     `command: ${[command, ...args].map((value) => JSON.stringify(value)).join(' ')}\n`
   );
-  process.stdout.write(`cwd: ${JSON.stringify(path.dirname(executable))}\n`);
+  process.stdout.write(`cwd: ${JSON.stringify(gameCwd)}\n`);
+  if (Object.keys(gameEnvironment).length > 0) {
+    process.stdout.write(`environment: ${JSON.stringify(gameEnvironment)}\n`);
+  }
   if (prefix) {
     process.stdout.write(`winePrefix: ${JSON.stringify(prefix)}\n`);
   }
@@ -213,6 +312,26 @@ export function registerRunCommand(program: Command): void {
       []
     )
     .option(
+      '--umu',
+      'Direct-launch with umu-run instead of Wine; does not emulate Ubisoft ownership or DRM'
+    )
+    .option(
+      '--umu-command <command>',
+      'Explicit umu-run command or executable path; requires --umu'
+    )
+    .option(
+      '--proton <directory>',
+      'Set PROTONPATH for --umu to an explicit Proton directory'
+    )
+    .option(
+      '--legacy-compat',
+      'Opt into legacy Proton tuning (four-core topology and NvAPI disablement)'
+    )
+    .option(
+      '--cpu-limit <n>',
+      'Override the legacy visible CPU count (0 disables the topology cap)'
+    )
+    .option(
       '--wine-prefix <directory>',
       'Explicit Wine prefix exported to child processes as WINEPREFIX'
     )
@@ -249,8 +368,37 @@ export function registerRunCommand(program: Command): void {
         installDir,
         options.executable
       );
-      const runner = options.runner ?? defaultRunner();
+      const runner = options.umu
+        ? await resolveUmuCommand(options.umuCommand)
+        : (options.runner ?? defaultRunner());
       validateConnectOptions(options, runner);
+
+      const cpuLimit = Number.parseInt(options.cpuLimit ?? '4', 10);
+      if (!Number.isSafeInteger(cpuLimit) || cpuLimit < 0 || cpuLimit > 64) {
+        throw new UserFacingError(
+          '--cpu-limit must be a whole number between 0 and 64.'
+        );
+      }
+      let protonPath: string | undefined;
+      if (options.proton) {
+        protonPath = path.resolve(options.proton);
+        const protonStats = await stat(protonPath).catch(() => undefined);
+        if (!protonStats?.isDirectory()) {
+          throw new UserFacingError(
+            `Proton directory does not exist: ${protonPath}`
+          );
+        }
+      }
+      const gameEnvironment: NodeJS.ProcessEnv = {
+        ...(options.umu ? { GAMEID: '0', STORE: 'none' } : {}),
+        ...(protonPath ? { PROTONPATH: protonPath } : {}),
+        ...(options.legacyCompat
+          ? legacyCompatibilityEnvironment(cpuLimit)
+          : {})
+      };
+      const gameCwd = options.legacyCompat
+        ? legacyWorkingDirectory(installDir, executable)
+        : path.dirname(executable);
 
       const prefix = options.winePrefix
         ? path.resolve(options.winePrefix)
@@ -272,7 +420,9 @@ export function registerRunCommand(program: Command): void {
           prefix,
           connectExecutable,
           useConnect,
-          options.connectProductId
+          options.connectProductId,
+          gameCwd,
+          gameEnvironment
         );
         return;
       }
@@ -373,7 +523,8 @@ export function registerRunCommand(program: Command): void {
             runner,
             executable,
             resolvedPrefix,
-            options.runnerArg
+            options.runnerArg,
+            gameEnvironment
           )
         : {
             command: executable,
@@ -381,6 +532,7 @@ export function registerRunCommand(program: Command): void {
             cwd: path.dirname(executable),
             env: sanitizedChildEnvironment()
           };
+      gameSpec.cwd = gameCwd;
       await runProcess(gameSpec, 'Game process');
     });
 }

@@ -167,9 +167,19 @@ Current modules include:
 1. Parse the live owned manifest.
 2. Select a bounded file set by default; require explicit `--all --yes` for the full manifest.
 3. SHA-256-verify resume-state entries before deciding which files still need slices.
-4. Derive one deterministic CDN path per needed slice and resolve signed URLs through reused per-product Demux initialization.
-5. Fetch/decompress slices and publish contained output files through synced atomic renames.
+4. Derive the deterministic modern CDN path and legacy flat path per needed slice, then resolve signed URLs through reused per-product Demux initialization.
+5. Fetch/decompress slices with bounded rolling per-file prefetch and publish contained output files through synced atomic renames.
 6. Persist manifest-bound SHA-256 resume metadata and retain signed-URL refresh as a fallback.
+
+Owned entries without an inline `latestManifest` use the ownership service's batched latest-manifest fallback. Slice decompression supports zstd, zlib-framed deflate, raw deflate, and already-uncompressed legacy data; declared sizes and decompressed SHA-1 values remain authoritative when present.
+
+### Optional UMU compatibility launch
+
+`ubi run --umu` is an explicit direct-launch backend for games that can already start without the official client. It discovers `umu-run` or accepts `--umu-command`, optionally sets `PROTONPATH`, and can apply a bounded CPU topology plus NvAPI disablement through `--legacy-compat`. It neither deploys Ubisoft loader replacements nor changes entitlement, ticket, certificate, registry, or Connect state, and it cannot be combined with the official `--connect` handoff.
+
+`ubi launcherless` is a second, explicitly opt-in backend for supported owned legacy games. It resolves ownership through the existing Demux session, requests a per-game ticket when a nonzero Uplay ID exists, and requires a separate local-ticket opt-in otherwise. It consumes an external replacement-loader directory, records exact shim/original hashes, deploys only within the game directory, and writes ticket-bearing profiles only for the lifetime of the child process. The real Ubisoft password is not available after CLI login and is never persisted; a non-secret marker satisfies legacy APIs that merely require a nonempty password string.
+
+Launcherless runs use a dedicated prefix and set native/Wow64 Ubisoft install-path registry values there. They do not read a signing private key, trust a replacement-loader certificate, mutate Connect's official prefix, or start `UbisoftConnect.exe`. Existing game-provided EAX DLLs are preserved; the external EAX fallback is deployed only when the executable references EAX and no implementation exists. Original loader DLLs are restored automatically on normal exit unless `--keep-shims` is explicit, preserving later official Connect behavior. `launcherless restore` hash-verifies active shims and backups before recovery or manual reversal.
 
 ### `ubi connect-seed <install-directory>`
 

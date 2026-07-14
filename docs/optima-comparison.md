@@ -7,6 +7,12 @@ Compared on 2026-07-13:
 
 This was a static code review plus local build-quality checks. Optima was not run against Ubisoft, no game or shim binary was executed, no credentials were supplied, and the tracked `drm/signing/optima-signing.key` file was not opened. `cargo test --locked` compiled successfully but ran zero tests; `cargo fmt --check` reported formatting differences, and strict Clippy failed on warnings. Findings below describe the reviewed commit and may change upstream.
 
+## Implementation follow-up (2026-07-14)
+
+The four neutral downloader recommendations are now implemented here with tests: latest-manifest fallback, modern plus legacy-flat slice paths, raw-deflate support, and bounded rolling per-file slice prefetch. `ubi run` also has an explicit UMU/Proton compatibility mode with optional CPU-topology and NvAPI tuning.
+
+After the initial review, launcherless legacy support was accepted as an explicit project goal. A separate `ubi launcherless` backend now consumes an explicit external shim bundle, verifies live ownership, prefers a Ubisoft-issued per-game ticket, requires `--allow-local-ticket` when a legacy row exposes no Uplay ID, deploys hash-recorded reversible loaders, writes temporary owner-only profiles, configures only a dedicated prefix, and never imports Optima's signing key/certificate or stores the real account password. The official Connect backend remains unchanged.
+
 ## Executive conclusion
 
 The projects overlap in authentication, ownership, Demux, manifests, and CDN reconstruction, but they deliberately choose different launch trust boundaries:
@@ -27,14 +33,11 @@ local launch cache
   -> direct Proton launch without Connect
 
 ubi-cli-mvp launch plane:
-official Connect remembered profile
-  -> official product registration/staging
-  -> guarded payload seed
-  -> official verification/finalization
-  -> uplay:// launch through UbisoftConnect.exe
+official backend: remembered Connect profile -> registration/verification -> uplay://
+optional legacy backend: live ownership -> temporary shim profile -> direct UMU/Proton
 ```
 
-Optima offers a cleaner launcherless handheld/offline experience for a narrow legacy-game class. `ubi-cli-mvp` is substantially safer, more tested, and broader in principle because official Connect retains registration, entitlement, DRM, overlay, cloud, DLC, and online authority.
+Optima established the useful launcherless handheld/offline pattern for a narrow legacy-game class. `ubi-cli-mvp` now exposes that pattern behind a more isolated and tested optional backend while retaining the broader official path for registration, DRM, overlay, cloud, DLC, and online authority.
 
 Optima does **not** solve first-ever desktop Connect authentication. Its WebAuth result is used for direct UbiServices/Demux access; it never creates or imports `ConnectSecureStorage.dat`, a matching `MachineGuid`, or another state accepted by `UbisoftConnect.exe`. It avoids that boundary by replacing the APIs loaded by selected games.
 
@@ -42,23 +45,23 @@ Optima does **not** solve first-ever desktop Connect authentication. Its WebAuth
 
 | Area                           | Optima                                                                       | `ubi-cli-mvp`                                                                                   |
 | ------------------------------ | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Primary goal                   | Headless Connect replacement for Linux/Deck                                  | Hardened Ubisoft CLI/downloader plus official Connect bridge                                    |
+| Primary goal                   | Headless Connect replacement for Linux/Deck                                  | Hardened CLI/downloader with separate official and optional legacy-launcherless backends        |
 | Implementation                 | Compact Rust binary                                                          | Layered TypeScript CLI/services                                                                 |
 | CLI authentication             | Direct password API, pasted browser ticket, or local WebAuth page            | Direct session API with challenge replay, MFA, active-ticket refresh, then remember-me fallback |
 | Desktop Connect authentication | Not implemented; Connect is avoided                                          | First login/MFA stays in official Connect; remembered state can be checked or migrated one-way  |
 | Library                        | Demux-owned base games, numeric IDs                                          | GraphQL and Demux views, title search, public-ID/config reconciliation, add-on graph            |
-| Missing-manifest fallback      | Implements `GetLatestManifests`                                              | Currently requires inline `latestManifest`                                                      |
-| Slice layouts                  | Modern bucketed `slices_v3` and legacy flat `slices`                         | Deterministic `slices_v3` only                                                                  |
-| Compression                    | Zstd, zlib-wrapped deflate, raw deflate fallback                             | Zstd and zlib framing                                                                           |
+| Missing-manifest fallback      | Implements `GetLatestManifests`                                              | Implements the ownership-service latest-manifest fallback                                       |
+| Slice layouts                  | Modern bucketed `slices_v3` and legacy flat `slices`                         | Modern bucketed and legacy flat paths with deterministic hash mapping                           |
+| Compression                    | Zstd, zlib-wrapped deflate, raw deflate fallback                             | Zstd, zlib-wrapped deflate, raw deflate, and verified uncompressed payloads                     |
 | Download concurrency           | 16 slices per file; files processed sequentially                             | 1–8 files, shared in-flight slices, persistent slice cache                                      |
 | Resume                         | Existing size match                                                          | Manifest/output-bound state plus SHA-256 revalidation                                           |
 | Integrity                      | No slice hash/size verification                                              | Decompressed size/SHA-1 checks, bounds, atomic files, final SHA-256 resume verification         |
 | Path safety                    | Joins network manifest paths directly                                        | Rejects absolute/traversal paths and symlinked parents                                          |
 | Install semantics              | Reconstructs a standalone tree; does not apply full manifest install actions | Reconstructs safely, then lets Connect create/verify/finalize authoritative installation state  |
-| Launch                         | Replaces Uplay/Orbit DLLs and fabricates expected local API/config responses | Uses the official registered `uplay://launch/<id>/0` route                                      |
-| Legacy fixes                   | Uplay R1, Orbit R2, EAX, umu/Proton tuning, settings-app launch              | General Wine/direct runner plus official Connect; no DRM loader replacement                     |
+| Launch                         | Replaces Uplay/Orbit DLLs and fabricates expected local API/config responses | Official `uplay://` path plus isolated, reversible, ownership-gated legacy replacement loaders  |
+| Legacy fixes                   | Uplay R1, Orbit R2, EAX, umu/Proton tuning, settings-app launch              | Uplay R1/Orbit R2 bundle support, native-EAX preservation/fallback, and UMU/Proton tuning       |
 | Modern DRM/online              | Explicitly out of scope                                                      | Delegated to official Connect/game; still title/Wine dependent                                  |
-| Tests                          | Zero tests at reviewed commit                                                | 92 tests across 26 files, plus format/lint/typecheck/build CI                                   |
+| Tests                          | Zero tests at reviewed commit                                                | 110 tests across 27 files, plus format/lint/typecheck/build CI                                  |
 | Maturity at comparison         | 8 commits over two days, one contributor                                     | 53 commits since March 2026, two contributors                                                   |
 
 ## What Optima does better
@@ -225,14 +228,13 @@ Good sharing candidates:
 7. Neutral runner/umu discovery and non-secret compatibility settings.
 8. EAX compatibility as an independently licensed, reproducibly built optional component.
 
-Do not merge into the official bridge:
+Keep isolated from the official bridge:
 
-- password collection/storage or password-bearing game profiles;
-- `IsAppOwned`/connected-state emulation;
-- placeholder ticket behavior;
-- Uplay/Orbit replacement loaders;
+- collection or storage of the real account password;
+- persistent ticket-bearing game profiles;
+- unverified ownership assertions;
 - self-signed certificate trust;
-- fabricated launcher registration; or
+- mutation of the official Connect prefix/registration; or
 - conversion/manufacture of opaque Connect authentication state.
 
 Before accepting Optima code, audit inbound licenses for the YoobieRE schemas, vendored Re0xCat sources, prebuilt DLLs, and generated/signing artifacts. Both roots being MIT does not by itself establish that every vendored binary/source has compatible provenance.
@@ -241,4 +243,4 @@ Before accepting Optima code, audit inbound licenses for the YoobieRE schemas, v
 
 Do not replace `ubi-cli-mvp` with Optima and do not merge the repositories wholesale.
 
-Port the four clear neutral wins first—missing-manifest lookup, flat slices, raw deflate, and bounded per-file slice prefetch—into the tested downloader here. Consider a separate optional `umu` runner/settings helper. Leave the launcherless DRM-shim strategy in a separate project with explicit security/legal warnings and independent review.
+The neutral wins and the isolated launcherless backend are now implemented. Continue treating the replacement-loader bundle as an external, independently reviewed input; expand title support only with exact export/provenance checks and live regression evidence. Keep the official and launcherless launch planes separate.

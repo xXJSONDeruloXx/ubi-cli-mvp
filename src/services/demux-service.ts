@@ -15,7 +15,7 @@ import { DemuxClient } from '../core/demux-client';
 import { HttpClient } from '../core/http';
 import { loadUbisoftDemuxModule } from '../core/ubisoft-demux-loader';
 import type { AppPaths, RuntimeConfig } from '../models/config';
-import { inflateSync, zstdDecompressSync } from 'node:zlib';
+import { inflateRawSync, inflateSync, zstdDecompressSync } from 'node:zlib';
 import type {
   DemuxDownloadUrlsInfo,
   DemuxExtractedFileResult,
@@ -29,7 +29,9 @@ import type { ProductConfigSummary } from '../models/product';
 import { UserFacingError } from '../util/errors';
 import {
   collectUniqueSliceHexHashes,
-  sliceHexToRelativePath,
+  isValidSliceToken,
+  normalizeManifestSliceList,
+  sliceHexToDownloadRelativePaths,
   sliceTokenToHex
 } from '../util/demux-slices';
 import {
@@ -58,6 +60,7 @@ interface DemuxOwnedGamePayload {
   }>;
   ubiservicesSpaceId?: string;
   ubiservicesAppId?: string;
+  uplayId?: number;
   latestManifest?: string;
 }
 
@@ -131,6 +134,7 @@ interface ExtractionCache {
     outputPath: string
   ) => Promise<void>;
   signal?: AbortSignal;
+  slicePrefetchCount: number;
 }
 
 interface PreparedLiveManifestExtraction {
@@ -152,6 +156,17 @@ export interface DownloadProgressEvent {
   totalBatchCount?: number;
   uniqueSliceCount?: number;
   elapsedMs?: number;
+}
+
+export interface LauncherlessAccount {
+  game: DemuxOwnedGame;
+  userId: string;
+  username: string;
+  email: string;
+  uplayPcTicket: string;
+  appId: number;
+  ticketSource: 'ubisoft' | 'local-owned-assertion';
+  profilePassword: string;
 }
 
 function toNumber(value: unknown): number {
@@ -188,6 +203,7 @@ const SLICE_FETCH_TIMEOUT_MS = 300_000;
 const SLICE_FETCH_RETRY_COUNT = 1;
 const DEFAULT_GAME_FILE_LIMIT = 10;
 const DEFAULT_GAME_MAX_INSTALL_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_SLICE_PREFETCH_COUNT = 4;
 
 function isLikelyZlibFrame(body: Buffer): boolean {
   if (body.length < 2) {
@@ -352,6 +368,44 @@ export class DemuxService {
     );
   }
 
+  public async resolveLauncherlessAccount(
+    query: string,
+    allowLocalTicket = false
+  ): Promise<LauncherlessAccount> {
+    const game = await this.resolveOwnedGame(query);
+    if (!game.owned) {
+      throw new UserFacingError(
+        `Product ${game.demuxProductId} is not owned by the authenticated account.`
+      );
+    }
+    const session = await this.authService.ensureValidSession();
+    const uplayPcTicket = game.uplayId
+      ? await this.demuxClient.getUplayPcTicket(session, game.uplayId)
+      : undefined;
+    if (!uplayPcTicket) {
+      if (!allowLocalTicket) {
+        throw new UserFacingError(
+          `Ubisoft ownership_service did not issue a Uplay PC ticket for owned product ${game.demuxProductId}. Re-run with --allow-local-ticket to use the legacy shim's local ownership assertion after live ownership verification.`
+        );
+      }
+    }
+    const username = session.nameOnPlatform ?? session.userId;
+    return {
+      game,
+      userId: session.profileId ?? session.userId,
+      username,
+      email:
+        session.email ??
+        `${username.replace(/[^a-z0-9._-]/gi, '_')}@invalid.local`,
+      uplayPcTicket: uplayPcTicket ?? `UBI_CLI_OWNED_${game.demuxProductId}`,
+      appId: game.uplayId || game.demuxProductId,
+      ticketSource: uplayPcTicket ? 'ubisoft' : 'local-owned-assertion',
+      // The legacy shim exposes this value to games but never validates it.
+      // The real Ubisoft password is intentionally not retained after login.
+      profilePassword: 'UBI_CLI_AUTHENTICATED'
+    };
+  }
+
   public async getDownloadUrls(query: string): Promise<DemuxDownloadUrlsInfo> {
     const game = await this.resolveOwnedGame(query);
     const manifestHash = game.latestManifest?.trim();
@@ -427,7 +481,7 @@ export class DemuxService {
     }>;
     let ownershipTokenExpiresAt: string | undefined;
     const pathChunks = chunkArray(
-      sliceHexHashes.map((hash) => sliceHexToRelativePath(hash)),
+      sliceHexHashes.flatMap((hash) => sliceHexToDownloadRelativePaths(hash)),
       256
     );
 
@@ -460,7 +514,12 @@ export class DemuxService {
 
       const existing = resolved.get(hash);
       if (existing) {
+        const hadUrls = existing.urls.length > 0;
         existing.urls.push(...response.urls);
+        if (!hadUrls && response.urls.length > 0) {
+          existing.relativePath = response.relativePath;
+          existing.result = response.result;
+        }
         continue;
       }
 
@@ -549,7 +608,8 @@ export class DemuxService {
       skippedExistingFileCount: 0,
       diskCacheHitCount: 0,
       memoryReuseHitCount: 0,
-      networkFetchCount: 0
+      networkFetchCount: 0,
+      slicePrefetchCount: 1
     };
     const files = [] as DemuxSliceDownloadResult['files'];
     for (const entry of sliceUrls.urls) {
@@ -664,6 +724,7 @@ export class DemuxService {
     options: {
       outputDir?: string;
       workerCount?: number;
+      slicePrefetchCount?: number;
       restart?: boolean;
       fileLimit?: number;
       maxInstallBytes?: number;
@@ -853,7 +914,8 @@ export class DemuxService {
       }
     );
     const cache = this.createExtractionCache(
-      pendingPlans.map((plan) => plan.file)
+      pendingPlans.map((plan) => plan.file),
+      options.slicePrefetchCount
     );
     cache.signal = options.signal;
     cache.skippedExistingFileCount = skippedPlans.length;
@@ -1091,11 +1153,14 @@ export class DemuxService {
   }
 
   private getParsedManifestFiles(parsed: unknown): ParsedManifestFileEntry[] {
-    return (
+    const files =
       (
         parsed as { chunks?: Array<{ files?: ParsedManifestFileEntry[] }> }
-      ).chunks?.flatMap((chunk) => chunk.files ?? []) ?? []
-    );
+      ).chunks?.flatMap((chunk) => chunk.files ?? []) ?? [];
+    return files.map((file) => ({
+      ...file,
+      sliceList: normalizeManifestSliceList(file.sliceList, file.slices)
+    }));
   }
 
   private collectSliceHexHashesForFiles(
@@ -1106,7 +1171,7 @@ export class DemuxService {
         files.flatMap((file) =>
           (file.sliceList ?? [])
             .map((slice) => slice.downloadSha1)
-            .filter((value): value is string | Buffer => Boolean(value))
+            .filter(isValidSliceToken)
             .map((value) => sliceTokenToHex(value))
         )
       )
@@ -1119,7 +1184,7 @@ export class DemuxService {
     const counts = new Map<string, number>();
     for (const file of files) {
       for (const slice of file.sliceList ?? []) {
-        if (!slice.downloadSha1) {
+        if (!isValidSliceToken(slice.downloadSha1)) {
           continue;
         }
 
@@ -1152,7 +1217,8 @@ export class DemuxService {
   }
 
   private createExtractionCache(
-    files: ParsedManifestFileEntry[]
+    files: ParsedManifestFileEntry[],
+    slicePrefetchCount = DEFAULT_SLICE_PREFETCH_COUNT
   ): ExtractionCache {
     return {
       decompressedByHash: new Map<string, Buffer>(),
@@ -1166,7 +1232,8 @@ export class DemuxService {
       skippedExistingFileCount: 0,
       diskCacheHitCount: 0,
       memoryReuseHitCount: 0,
-      networkFetchCount: 0
+      networkFetchCount: 0,
+      slicePrefetchCount: Math.min(8, Math.max(1, slicePrefetchCount))
     };
   }
 
@@ -1291,7 +1358,8 @@ export class DemuxService {
   private async fetchDecompressedSlice(
     entry: SliceResponseEntry,
     sliceHash: string,
-    cache: ExtractionCache
+    cache: ExtractionCache,
+    expectedSize = 0
   ): Promise<{ body: Buffer; bytesDownloaded: number }> {
     const cachedBody = cache.decompressedByHash.get(sliceHash);
     if (cachedBody) {
@@ -1315,7 +1383,7 @@ export class DemuxService {
         sliceHash,
         cache
       );
-      const body = this.decompressSliceBody(compressed.body);
+      const body = this.decompressSliceBody(compressed.body, expectedSize);
       cache.decompressedByHash.set(sliceHash, body);
       return {
         body,
@@ -1391,12 +1459,6 @@ export class DemuxService {
       throw new Error('Manifest file entry was missing a name.');
     }
 
-    if (!file.sliceList || file.sliceList.length === 0) {
-      throw new UserFacingError(
-        `Manifest file "${file.name}" did not expose slice metadata for extraction.`
-      );
-    }
-
     if (manifestOutputRoot) {
       await ensureSafeManifestOutputParent(manifestOutputRoot, outputPath);
     } else {
@@ -1409,18 +1471,24 @@ export class DemuxService {
         `Manifest file "${file.name}" declared an invalid file size.`
       );
     }
+    const sliceList = file.sliceList ?? [];
+    if (sliceList.length === 0 && expectedFileSize > 0) {
+      throw new UserFacingError(
+        `Manifest file "${file.name}" did not expose slice metadata for extraction.`
+      );
+    }
 
     let bytesDownloaded = 0;
     let bytesWritten = 0;
     let nextImplicitOffset = 0;
     let validatedSliceHashCount = 0;
     const shouldInferSequentialOffsets =
-      file.sliceList.length > 1 &&
-      file.sliceList.every((slice) => toNumber(slice.fileOffset) === 0);
+      sliceList.length > 1 &&
+      sliceList.every((slice) => toNumber(slice.fileOffset) === 0);
 
     if (await this.shouldSkipExistingExtraction(file, outputPath, cache)) {
       return {
-        sliceCount: file.sliceList.length,
+        sliceCount: sliceList.length,
         bytesDownloaded: 0,
         bytesWritten: expectedFileSize,
         validatedSliceHashCount: 0
@@ -1431,12 +1499,60 @@ export class DemuxService {
       path.dirname(outputPath),
       `.${path.basename(outputPath)}.${randomUUID()}.partial`
     );
+    const prefetched = new Map<
+      number,
+      Promise<
+        | { fetched: { body: Buffer; bytesDownloaded: number } }
+        | { error: unknown }
+      >
+    >();
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
       handle = await open(temporaryOutputPath, 'wx', 0o600);
       await handle.truncate(expectedFileSize);
 
-      for (const [index, slice] of file.sliceList.entries()) {
+      let nextPrefetchIndex = 0;
+      const schedulePrefetch = (index: number): void => {
+        const candidate = sliceList[index];
+        if (!candidate?.downloadSha1) {
+          prefetched.set(
+            index,
+            Promise.resolve({
+              error: new Error(
+                `Manifest file "${file.name}" had a slice without downloadSha1.`
+              )
+            })
+          );
+          return;
+        }
+        const candidateHash = sliceTokenToHex(candidate.downloadSha1);
+        const candidateResponse = responsesByHash.get(candidateHash);
+        if (!candidateResponse) {
+          prefetched.set(
+            index,
+            Promise.resolve({
+              error: new Error(
+                `Demux download service did not return a URL for slice ${candidateHash}.`
+              )
+            })
+          );
+          return;
+        }
+        prefetched.set(
+          index,
+          this.fetchDecompressedSlice(
+            candidateResponse,
+            candidateHash,
+            cache,
+            toNumber(candidate.size)
+          ).then(
+            (fetched) => ({ fetched }),
+            (error: unknown) => ({ error })
+          )
+        );
+      };
+
+      for (const [index, slice] of sliceList.entries()) {
         cache.signal?.throwIfAborted();
         if (!slice.downloadSha1) {
           throw new Error(
@@ -1452,11 +1568,22 @@ export class DemuxService {
           );
         }
 
-        const fetched = await this.fetchDecompressedSlice(
-          responseEntry,
-          sliceHash,
-          cache
-        );
+        while (
+          nextPrefetchIndex < sliceList.length &&
+          nextPrefetchIndex < index + cache.slicePrefetchCount
+        ) {
+          schedulePrefetch(nextPrefetchIndex);
+          nextPrefetchIndex += 1;
+        }
+        const outcome = await prefetched.get(index);
+        prefetched.delete(index);
+        if (!outcome) {
+          throw new Error(`Slice ${sliceHash} was not scheduled for download.`);
+        }
+        if ('error' in outcome) {
+          throw outcome.error;
+        }
+        const fetched = outcome.fetched;
         const decompressedBody = fetched.body;
         bytesDownloaded += fetched.bytesDownloaded;
 
@@ -1515,6 +1642,7 @@ export class DemuxService {
       await rename(temporaryOutputPath, outputPath);
       await cache.recordCompletedFile?.(file, outputPath);
     } catch (error) {
+      await Promise.all(prefetched.values());
       if (handle) {
         await handle.close();
       }
@@ -1523,7 +1651,7 @@ export class DemuxService {
     }
 
     return {
-      sliceCount: file.sliceList.length,
+      sliceCount: sliceList.length,
       bytesDownloaded,
       bytesWritten,
       validatedSliceHashCount
@@ -1622,14 +1750,31 @@ export class DemuxService {
     };
   }
 
-  private decompressSliceBody(body: Buffer): Buffer {
+  private decompressSliceBody(body: Buffer, expectedSize = 0): Buffer {
     const zstdMagic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
     if (body.length >= 4 && body.subarray(0, 4).equals(zstdMagic)) {
       return Buffer.from(zstdDecompressSync(body));
     }
 
+    if (expectedSize > 0 && body.length === expectedSize) {
+      return body;
+    }
+
     if (isLikelyZlibFrame(body)) {
-      return Buffer.from(inflateSync(body));
+      try {
+        return Buffer.from(inflateSync(body));
+      } catch {
+        // Some uncompressed legacy slices coincidentally have a zlib-like header.
+      }
+    }
+
+    try {
+      const inflated = Buffer.from(inflateRawSync(body));
+      if (expectedSize <= 0 || inflated.length === expectedSize) {
+        return inflated;
+      }
+    } catch {
+      // Some legacy manifests store already-uncompressed slice bytes.
     }
 
     return body;
@@ -1704,6 +1849,7 @@ export class DemuxService {
       publicProductId: catalogMatch?.productId,
       spaceId: game.ubiservicesSpaceId || catalogMatch?.spaceId,
       appId: game.ubiservicesAppId || catalogMatch?.appId,
+      uplayId: game.uplayId,
       latestManifest:
         latestManifest && latestManifest.trim().length > 0
           ? latestManifest

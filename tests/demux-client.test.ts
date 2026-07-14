@@ -31,7 +31,13 @@ describe('demux client', () => {
               success: true,
               ownedGames: {
                 ownedGames: [
-                  { productId: 3539, owned: true, state: 3, productType: 0 }
+                  {
+                    productId: 3539,
+                    owned: true,
+                    state: 3,
+                    productType: 0,
+                    latestManifest: 'INLINE'
+                  }
                 ]
               }
             }
@@ -134,6 +140,157 @@ describe('demux client', () => {
       }
     ]);
 
+    await client.destroy();
+  });
+
+  it('fills missing inline manifests through the ownership fallback', async () => {
+    const ownershipRequests: Array<{
+      request: Record<string, unknown>;
+    }> = [];
+    const moduleLoader = () =>
+      Promise.resolve({
+        UbisoftDemux: class {
+          public socket = { push: () => Promise.resolve() };
+
+          public basicRequest(payload: unknown) {
+            return Promise.resolve(
+              typeof payload === 'object' &&
+                payload !== null &&
+                'getPatchInfoReq' in payload
+                ? { getPatchInfoRsp: { success: true, latestVersion: 13099 } }
+                : { authenticateRsp: { success: true } }
+            );
+          }
+
+          public openConnection() {
+            return Promise.resolve({
+              connectionId: 1,
+              request: (payload: { request: Record<string, unknown> }) => {
+                ownershipRequests.push(payload);
+                if ('initializeReq' in payload.request) {
+                  return Promise.resolve({
+                    response: {
+                      initializeRsp: {
+                        success: true,
+                        ownedGames: {
+                          ownedGames: [
+                            {
+                              productId: 109,
+                              owned: true,
+                              state: 3,
+                              productType: 0,
+                              latestManifest: '   '
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  });
+                }
+                return Promise.resolve({
+                  response: {
+                    deprecatedGetLatestManifestsRsp: {
+                      manifests: [
+                        { productId: 109, manifest: ' FALLBACK-HASH ' }
+                      ]
+                    }
+                  }
+                });
+              }
+            });
+          }
+
+          public destroy() {
+            return Promise.resolve();
+          }
+        }
+      });
+    const client = new DemuxClient(createConfig(), createLogger(), {
+      moduleLoader
+    });
+    const games = await client.listOwnedGames({
+      ticket: 'ticket',
+      sessionId: 'session',
+      userId: 'user'
+    });
+
+    expect(games[0]?.latestManifest).toBe('FALLBACK-HASH');
+    expect(ownershipRequests[1]?.request).toMatchObject({
+      deprecatedGetLatestManifestsReq: {
+        deprecatedProductIds: [109],
+        deprecatedTestConfig: false
+      }
+    });
+    await client.destroy();
+  });
+
+  it('requests a real per-game Uplay PC ticket from ownership_service', async () => {
+    const requests: Array<{ request: Record<string, unknown> }> = [];
+    const moduleLoader = () =>
+      Promise.resolve({
+        UbisoftDemux: class {
+          public socket = { push: () => Promise.resolve() };
+
+          public basicRequest(payload: unknown) {
+            return Promise.resolve(
+              typeof payload === 'object' &&
+                payload !== null &&
+                'getPatchInfoReq' in payload
+                ? { getPatchInfoRsp: { success: true, latestVersion: 13099 } }
+                : { authenticateRsp: { success: true } }
+            );
+          }
+
+          public openConnection() {
+            return Promise.resolve({
+              connectionId: 1,
+              request: (payload: { request: Record<string, unknown> }) => {
+                requests.push(payload);
+                return Promise.resolve(
+                  'initializeReq' in payload.request
+                    ? {
+                        response: {
+                          initializeRsp: {
+                            success: true,
+                            ownedGames: { ownedGames: [] }
+                          }
+                        }
+                      }
+                    : {
+                        response: {
+                          getUplayPcTicketRsp: {
+                            success: true,
+                            uplayPcTicket: 'game-ticket'
+                          }
+                        }
+                      }
+                );
+              }
+            });
+          }
+
+          public destroy() {
+            return Promise.resolve();
+          }
+        }
+      });
+    const client = new DemuxClient(createConfig(), createLogger(), {
+      moduleLoader
+    });
+    const session: StoredSession = {
+      ticket: 'ticket',
+      sessionId: 'session',
+      userId: 'user'
+    };
+
+    await expect(client.getUplayPcTicket(session, 77)).resolves.toBe(
+      'game-ticket'
+    );
+    expect(requests[1]?.request).toMatchObject({
+      getUplayPcTicketReq: { uplayId: 77 },
+      ubiTicket: 'ticket',
+      ubiSessionId: 'session'
+    });
     await client.destroy();
   });
 

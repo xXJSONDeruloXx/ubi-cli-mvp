@@ -12,6 +12,7 @@ export interface DemuxOwnedGame {
   publicProductId?: number;
   spaceId?: string;
   appId?: string;
+  uplayId?: number;
   latestManifest?: string;
   owned: boolean;
   state: number;

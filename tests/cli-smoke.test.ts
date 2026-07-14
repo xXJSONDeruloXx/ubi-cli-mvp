@@ -47,11 +47,24 @@ describe('cli smoke test', () => {
     expect(stdout).toContain('extract-files');
     expect(stdout).toContain('download-game');
     expect(stdout).toContain('run');
+    expect(stdout).toContain('launcherless');
     expect(stdout).toContain('play');
     expect(stdout).toContain('connect-prefix');
     expect(stdout).toContain('connect-profile');
     expect(stdout).toContain('connect-install');
     expect(stdout).toContain('connect-seed');
+  }, 120_000);
+
+  it('advertises repeatable launcherless game arguments', async () => {
+    const stdout = await run('node', [
+      'dist/index.js',
+      'launcherless',
+      'run',
+      '--help'
+    ]);
+
+    expect(stdout).toContain('--game-arg <argument>');
+    expect(stdout).toContain('after the game executable');
   }, 120_000);
 
   it('emits parseable offline setup JSON and a strict incomplete exit', async () => {
@@ -138,6 +151,7 @@ describe('cli smoke test', () => {
 
     expect(stdout).toContain('--limit');
     expect(stdout).toContain('--max-install-bytes');
+    expect(stdout).toContain('--slice-workers');
     expect(stdout).toContain('--all');
     expect(stdout).toContain('--yes');
     expect(stdout).toContain('--dry-run');
@@ -156,6 +170,10 @@ describe('cli smoke test', () => {
     const stdout = await run('node', ['dist/index.js', 'run', '--help']);
 
     expect(stdout).toContain('--wine-prefix');
+    expect(stdout).toContain('--umu');
+    expect(stdout).toContain('--umu-command');
+    expect(stdout).toContain('--proton');
+    expect(stdout).toContain('--legacy-compat');
     expect(stdout).toContain('--connect');
     expect(stdout).toContain('--ensure-connect');
     expect(stdout).toContain('--connect-installer');
