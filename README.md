@@ -58,6 +58,7 @@ Implemented or partially implemented commands:
 - `ubi download-game <query>`
 - `ubi run <install-directory>`
 - `ubi play <product-id>`
+- `ubi connect-install <product-id>`
 - `ubi connect-profile ...`
 - `ubi connect-prefix clone ...`
 - `ubi connect-seed <install-directory>`
@@ -301,6 +302,12 @@ node dist/index.js play 109
 ```
 
 `play` invokes the official product URI, waits for the profiled game process, and stops Connect after the game exits so its launcher/promotional UI is not left open. Use `--leave-connect-open` to opt out or `--dry-run` to inspect the command.
+
+For an uninstalled owned product, `connect-install <productId>` invokes the supported `uplay://install/<productId>` handler and opens its official language/path confirmation directly, avoiding library navigation. Authentication and confirmations remain inside Connect; the CLI does not synthesize clicks or begin transfer itself.
+
+```bash
+node dist/index.js connect-install 82
+```
 
 A same-machine whole-prefix clone can preserve remembered authentication, including Wine DPAPI/device state, but Connect may rotate the refresh token when the clone starts and invalidate the source. Treat this as a **one-way migration**, not a parallel multi-prefix template. The guarded command requires explicit sensitive-state acknowledgement, defaults to reflink-only cloning, creates an owner-only (`0700`) target, and refuses to merge into an existing prefix:
 

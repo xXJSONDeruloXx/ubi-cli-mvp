@@ -46,6 +46,7 @@ describe('cli smoke test', () => {
     expect(stdout).toContain('play');
     expect(stdout).toContain('connect-prefix');
     expect(stdout).toContain('connect-profile');
+    expect(stdout).toContain('connect-install');
     expect(stdout).toContain('connect-seed');
   }, 120_000);
 
@@ -95,6 +96,13 @@ describe('cli smoke test', () => {
     expect(cloneHelp).toContain('--include-auth');
     expect(cloneHelp).toContain('--yes');
     expect(cloneHelp).toContain('--allow-full-copy');
+
+    const installHelp = await run('node', [
+      'dist/index.js',
+      'connect-install',
+      '--help'
+    ]);
+    expect(installHelp).toContain('--dry-run');
 
     const playHelp = await run('node', ['dist/index.js', 'play', '--help']);
     expect(playHelp).toContain('--dry-run');

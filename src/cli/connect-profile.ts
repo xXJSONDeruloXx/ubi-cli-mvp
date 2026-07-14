@@ -188,6 +188,81 @@ export function registerConnectProfileCommands(program: Command): void {
     });
 
   program
+    .command('connect-install <productId>')
+    .description(
+      'Open the official Connect install flow directly through uplay://install'
+    )
+    .option('--runner <command>', 'Wine-compatible runner command', 'wine')
+    .option(
+      '--runner-arg <argument>',
+      'Argument placed before UbisoftConnect.exe; repeat when needed',
+      collectRunnerArgument,
+      []
+    )
+    .option(
+      '--dry-run',
+      'Print the resolved install URI without starting Connect'
+    )
+    .action(
+      async (
+        productId: string,
+        options: {
+          runner: string;
+          runnerArg: string[];
+          dryRun?: boolean;
+        }
+      ) => {
+        validateProductId(productId);
+        const store = await loadConnectProfiles(profileStorePath());
+        const gameProfile = store.games[productId];
+        const configuredPrefix =
+          gameProfile?.winePrefix ?? store.defaultWinePrefix;
+        if (!configuredPrefix) {
+          throw new UserFacingError(
+            'No Connect Wine prefix is configured. Set connect-profile default first.'
+          );
+        }
+        const prefix = await validateExistingPrefix(configuredPrefix);
+        const clientExecutable = await findUbisoftConnectExecutable(prefix);
+        if (!clientExecutable) {
+          throw new UserFacingError(
+            'Ubisoft Connect executable disappeared from the configured prefix.'
+          );
+        }
+        const installUri = `uplay://install/${productId}`;
+        const spec = buildWineProcessSpec(
+          options.runner,
+          clientExecutable,
+          prefix,
+          options.runnerArg,
+          { WINEDLLOVERRIDES: 'mscoree,mshtml=' }
+        );
+        spec.args.push(installUri);
+        spec.stdio = 'ignore';
+
+        if (options.dryRun) {
+          process.stdout.write(
+            [
+              `productId: ${productId}`,
+              `winePrefix: ${prefix}`,
+              `installUri: ${installUri}`,
+              `command: ${[spec.command, ...spec.args].map((value) => JSON.stringify(value)).join(' ')}`
+            ].join('\n') + '\n'
+          );
+          return;
+        }
+
+        await runProcess(spec, 'Ubisoft Connect install flow');
+        process.stdout.write(
+          [
+            `connectInstallUri: ${installUri}`,
+            'Complete the official language/path confirmations in Connect. The CLI does not submit these dialogs or begin transfer on its own.'
+          ].join('\n') + '\n'
+        );
+      }
+    );
+
+  program
     .command('play <productId>')
     .description(
       'Launch a profiled installed product through the official uplay:// handler'

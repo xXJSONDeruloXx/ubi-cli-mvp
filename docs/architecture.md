@@ -188,7 +188,8 @@ Current modules include:
 2. Discover Connect or, with `--ensure-connect --yes`, download the exact pinned installer from its constrained official HTTPS endpoint and validate SHA-256 plus PE certificate-table structure before execution.
 3. Keep first credential/MFA entry in the official client UI; never transfer the CLI web session.
 4. After official install finalization, invoke `uplay://launch/<productId>/0` when `--connect-product-id` is supplied, allowing Connect to perform its normal launch/entitlement path without a Play-button click.
-5. `connect-profile` stores non-secret product/prefix paths, and `play <productId>` resolves that profile, invokes the URI, monitors the profiled game process through Wine, then stops Connect after game exit to avoid residual launcher/promotional UI.
+5. `connect-install <productId>` can invoke the supported `uplay://install/<productId>` handler to open Connect's official first-install confirmations without library navigation; the CLI does not synthesize confirmation clicks.
+6. `connect-profile` stores non-secret product/prefix paths, and `play <productId>` resolves that profile, invokes the launch URI, monitors the profiled game process through Wine, then stops Connect after game exit to avoid residual launcher/promotional UI.
 
 ### Public/fallback manifest path
 

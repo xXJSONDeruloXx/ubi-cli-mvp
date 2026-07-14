@@ -73,7 +73,8 @@ Exit criteria:
 - [x] Persist non-secret product/prefix/install profiles for a concise `ubi play <query>` workflow
 - [x] Monitor the profiled game lifecycle and stop Connect after exit to remove residual launcher/promotional UI
 - [x] Establish one shared persistent prefix as the safe remembered-auth model; constrain auth-prefix cloning to explicit one-way migration
-- [ ] Determine whether a supported URI/API can initiate a first official download without GUI clicks
+- [x] Use the supported `uplay://install/<productId>` handler to open first-install confirmations without library navigation
+- [ ] Determine whether language/path confirmations can be supplied through a supported API without GUI click synthesis
 - [ ] Add a guarded wait/orchestration mode around client-owned staging creation
 - [ ] Validate the bridge on another owned title/build before treating it as general
 
@@ -108,3 +109,4 @@ Exit criteria:
 - 2026-07-12: Added guided Connect launch support with explicit Wine prefixes, repeatable runner arguments, pinned official installer download/offline reuse, exact SHA-256 and PE certificate-table checks, and explicit install consent. Live-tested fresh-prefix installation and authenticated product-id 109 startup without transferring credentials.
 - 2026-07-13: Added guarded `connect-seed` bridging for a paused official download. Live product-109 validation seeded 2,237 mismatched files / 2.52 GB in 22s, after which Connect finalized instantly and all 5,320 installed payload hashes matched the CLI source. Both official Play and `uplay://launch/109/0` ran the game successfully. Remaining manual steps are first Connect authentication/MFA and one official Download initiation to create client-owned staging metadata.
 - 2026-07-13: Added owner-only non-secret Connect profiles and `ubi play`; live validation launched product 109, tracked normal game exit, and stopped Connect automatically. A Btrfs whole-prefix auth clone opened signed in but invalidated the source after token rotation, establishing one shared prefix as the default and cloning as one-way migration only.
+- 2026-07-13: Confirmed `uplay://install/82` opens the official Assassin's Creed language/install confirmation directly. Added `connect-install` to remove library navigation while intentionally leaving authentication and confirmation dialogs to Connect.
