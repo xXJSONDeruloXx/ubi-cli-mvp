@@ -61,6 +61,7 @@ Implemented or partially implemented commands:
 - `ubi connect-install <product-id>`
 - `ubi connect-profile ...`
 - `ubi connect-prefix clone ...`
+- `ubi connect-prefix migrate-auth ...`
 - `ubi connect-seed <install-directory>`
 - `ubi addons <title-or-id>`
 - `ubi doctor`
@@ -267,7 +268,7 @@ node dist/index.js run /games/splinter-cell \
   --ensure-connect --yes
 ```
 
-Connect did not expose a reliable **Locate installed game** path for the validated legacy build. Instead, start its official Download once, wait until transfer begins, pause it, and fully exit Connect. `connect-seed` then discovers the product registration created by Connect, refuses to run while the client is active, validates the official staging markers, SHA-256-compares every payload file, and atomically seeds only mismatches. It never changes Connect's registry, state, or manifest files.
+Connect did not expose a reliable **Locate installed game** path for the validated legacy build. Instead, start its official Download once, wait until transfer begins, pause it, and fully exit Connect. `connect-seed` then discovers the product registration created by Connect, refuses to run while the client is active, validates the official staging markers, SHA-256-compares every payload file, and atomically seeds only mismatches. Publication requests same-filesystem copy-on-write clones with safe full-copy fallback. It never changes Connect's registry, state, or manifest files.
 
 ```bash
 node dist/index.js connect-seed /games/splinter-cell \
@@ -309,14 +310,23 @@ For an uninstalled owned product, `connect-install <productId>` invokes the supp
 node dist/index.js connect-install 82
 ```
 
-A same-machine whole-prefix clone can preserve remembered authentication, including Wine DPAPI/device state, but Connect may rotate the refresh token when the clone starts and invalidate the source. Treat this as a **one-way migration**, not a parallel multi-prefix template. The guarded command requires explicit sensitive-state acknowledgement, defaults to reflink-only cloning, creates an owner-only (`0700`) target, and refuses to merge into an existing prefix:
+The CLI's public Ubisoft session cannot be converted into Connect desktop authentication: the CLI does not retain the password, and no supported ticket/device-code handoff into `UbisoftConnect.exe` is known. Connect keeps its own opaque encrypted client profile bound to the Wine device identity.
+
+For a stopped, existing destination prefix, `migrate-auth` can perform a guarded same-machine **one-way migration** of only the official Connect AppData profile and its matching Wine device identifier. It never decodes or prints the authentication state and does not copy game registration. Live validation showed a genuinely fresh prefix regenerate ownership state without a login UI. Starting the target may rotate authentication and invalidate the source, so retire the source afterward:
+
+```bash
+node dist/index.js connect-prefix migrate-auth /old/prefix /fresh/prefix \
+  --include-auth --yes
+```
+
+A whole-prefix migration remains available when installation/registration state must move too. It defaults to reflink-only cloning, creates an owner-only (`0700`) target, and refuses to merge into an existing prefix:
 
 ```bash
 node dist/index.js connect-prefix clone /old/prefix /new/prefix \
   --include-auth --yes
 ```
 
-Only one prefix in that authentication lineage should remain active. Prefer one shared persistent prefix instead of cloning.
+Only one prefix in an authentication lineage should remain active. Prefer one shared persistent prefix instead of repeatedly migrating or cloning.
 
 ### 15. Explore associated products / DLC-like entries
 
@@ -390,6 +400,8 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 - resume state stores manifest/output identifiers and completed-file SHA-256 values only; it never stores signed URLs or session values
 - verbose HTTP logs redact URL query strings, including signed-URL parameters
 - this MVP currently uses local file storage rather than OS keychain integration, because the goal was to validate the research flow first.[2][9]
+- Wine prefixes containing remembered Connect authentication are sensitive and owner-only; `migrate-auth` copies only opaque official client AppData plus its device binding, never prints either, and requires explicit `--include-auth --yes`
+- authenticated prefix migration is one-way: starting the target may rotate the client session and invalidate the source, which must then be retired
 
 ## Limitations
 
@@ -399,7 +411,7 @@ See `docs/architecture.md` for the source-backed module rationale.[1][2][4][5][6
 4. The CLI can now parse live `.manifest`, `.metadata`, and `.licenses` assets, download raw slice blobs, persist raw slice cache entries, and experimentally reconstruct some individual files, small matching file batches, or even a full game tree over multiple runs, but it still does **not** provide a launcher-grade install/update engine.[3][5][19]
 5. Download-service asset and slice exposure still varies by title, entitlement row, compression format, and file path; the current implementation gracefully handles missing live `.metadata`/`.licenses` URLs, but `extract-file`, `extract-files`, and `download-game` remain experimental rather than universally reliable for every manifest path or title.[4][5][19]
 6. Long-running full-game runs can still surface upstream service instability or title-specific formats. Deterministic slice paths made the validated 2.55-GB run fit comfortably within the observed signed-URL lifetime, while 403 refresh remains a fallback. The CLI performs bounded preflight by default and supports interrupt-driven cancellation, but it is not a launcher-grade installer or updater.[19]
-7. `ubi run` can bootstrap/start a pinned official Ubisoft Connect build; `connect-seed` can populate a paused official download without modifying client state; and profiled `ubi play` can launch through `uplay://`, monitor the game, and close Connect afterward. First client authentication/MFA and initial official download-state creation remain interactive. Authenticated prefix cloning is migration-only because token rotation can invalidate the source. Controller mappings and per-game runtime settings remain out of scope.
+7. `ubi run` can bootstrap/start a pinned official Ubisoft Connect build; `connect-prefix migrate-auth` can one-way reuse an official remembered login; `connect-seed` can populate client-owned staging without fabricating registration; and profiled `ubi play` can launch through `uplay://`, monitor the game, and close Connect afterward. The first-ever desktop authentication/MFA and each never-initialized product's official language/options/EULA/registration flow remain Connect operations. A reconstructed tree cannot safely register itself immediately. Controller mappings and per-game runtime settings remain out of scope.
 8. `ubi addons` currently exposes public associated products from the catalog graph; it does **not** prove those add-ons are owned by the authenticated account unless live Demux ownership reconciliation is applied.[4][12][19]
 
 ## Roadmap

@@ -39,3 +39,7 @@
 [19] `docs/validation.md` in this repository. Repo-local evidence log for live command validation, fixture-based validation, and Demux validation experiments carried out on 2026-03-23. ./docs/validation.md
 
 [20] UplayDB, `UplayKit/UplayKit/DemuxSocketExt.cs`. Shows the Demux `getPatchInfoReq`, `clientVersion` push, and `authenticateReq` sequence used by another reverse-engineered client. https://raw.githubusercontent.com/UplayDB/UplayKit/main/UplayKit/DemuxSocketExt.cs
+
+[21] PlayniteExtensions, `UplayLibrary.cs`. Open-source Ubisoft/Uplay launcher integration using product action URIs such as `uplay://install/<productId>` while relying on the official desktop client for authentication and installation. https://github.com/JosefNemec/PlayniteExtensions/blob/master/source/Libraries/UplayLibrary/UplayLibrary.cs
+
+[22] IETF RFC 8628, OAuth 2.0 Device Authorization Grant. Defines the endpoint and response contract required for a documented OAuth device-code flow; no equivalent public Connect PC contract was found. https://www.rfc-editor.org/rfc/rfc8628

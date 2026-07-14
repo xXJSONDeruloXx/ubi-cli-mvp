@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { constants } from 'node:fs';
 import {
   chmod,
   copyFile,
@@ -289,7 +290,7 @@ async function copyFileAtomically(
   );
 
   try {
-    await copyFile(source.absolutePath, temporary);
+    await copyFile(source.absolutePath, temporary, constants.COPYFILE_FICLONE);
     await chmod(temporary, source.mode);
     const handle = await open(temporary, 'r+');
     try {

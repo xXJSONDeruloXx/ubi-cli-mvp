@@ -97,6 +97,15 @@ describe('cli smoke test', () => {
     expect(cloneHelp).toContain('--yes');
     expect(cloneHelp).toContain('--allow-full-copy');
 
+    const migrateAuthHelp = await run('node', [
+      'dist/index.js',
+      'connect-prefix',
+      'migrate-auth',
+      '--help'
+    ]);
+    expect(migrateAuthHelp).toContain('--include-auth');
+    expect(migrateAuthHelp).toContain('--runner-arg');
+
     const installHelp = await run('node', [
       'dist/index.js',
       'connect-install',

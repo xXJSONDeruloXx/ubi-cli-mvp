@@ -137,7 +137,7 @@ It is now the gap between **manifest-tree reconstruction** and a registered, cli
 - some titles do not expose a useful `latestManifest`
 - public/catalog product IDs do not always align 1:1 with Demux ownership IDs
 - reconstruction works for selected files and at least one complete owned manifest, but remains title/build dependent
-- launcher-grade update, repair, install registration, and Ubisoft Connect integration are still unimplemented
+- launcher-grade update/repair and general product registration remain incomplete; one official-staging bridge is validated twice
 - the Ubisoft Splinter Cell build includes Uplay API loaders; direct Wine correctly failed without a client, while an official Connect install accepted the game API connection but still required interactive desktop-client authentication/entitlement handling
 - the CLI must not fabricate registration, replace Uplay DLLs, or repurpose its authenticated web session to bypass that user/client boundary
 
@@ -167,6 +167,14 @@ It is now the gap between **manifest-tree reconstruction** and a registered, cli
   - a Btrfs reflink clone of the full stopped prefix completed in 637ms and initially opened authenticated, proving Wine DPAPI/device/auth state is self-contained in the prefix
   - launching the clone rotated or invalidated the source prefix's remembered session, so authenticated clones are one-way migrations, not parallel templates; the test clone was stopped and deleted immediately
   - `connect-prefix clone` therefore requires `--include-auth --yes`, refuses existing targets, defaults to reflink-only behavior, and warns that only one authentication lineage may remain active
+- A subsequent clean-prefix isolation pass narrowed desktop auth migration without decoding any state:
+  - copying only `ConnectSecureStorage.dat`, a three-file client bundle, or complete Connect AppData did not authenticate the fresh prefix
+  - complete opaque Connect AppData plus the matching Wine `MachineGuid` regenerated the ownership cache without a login UI while product 109 remained unregistered
+  - no CLI ticket/password was injected and no game registration moved; the target became canonical and the source lineage was deleted
+  - `connect-prefix migrate-auth` now applies that same stopped-prefix operation with symlink rejection, atomic AppData replacement/rollback, device-identifier verification, owner-only permissions, and explicit `--include-auth --yes`
 - `connect-profile` now stores only mode-0600 product/source/prefix paths. A live profile for product 109 reduced launch to `ubi play 109`.
 - `play` invokes the official URI, monitors the profiled Wine game process, and stops Connect after game exit. Live validation launched Splinter Cell with no client clicks, detected normal exit, and left zero Wine/Connect processes, removing the post-game promotional-modal friction.
 - `uplay://install/82` was then validated against the owned, uninstalled original Assassin's Creed: it opened the official language confirmation directly without library navigation and did not register or transfer the game before confirmation. `connect-install` exposes that supported route while deliberately avoiding synthetic UI clicks.
+- The complete bridge was repeated in the newly authenticated but unregistered prefix. Connect's official product-109 language/options/EULA flow created registration/staging; 157 staged files already matched and 5,163 files / 2,528,843,854 bytes required seeding. Seed plus official finalization took 142s, all 5,320 finalized payload hashes matched, and a controlled `ubi play 109` lifecycle test passed before the old prefix was deleted.
+- This second clean pass confirms that CLI reconstruction does **not** register immediately. A never-initialized product still needs Connect to create its authoritative ownership signature, choices/consent, registry entry, staging, and final manifest. Restoring a previously finalized canonical prefix can preserve genuine receipts, but fabricating those records for a new product remains out of scope.
+- Atomic staging publication now requests filesystem copy-on-write clones with transparent full-copy fallback. A controlled same-filesystem benchmark seeded all 5,320 files / 2,545,474,351 bytes in 6.3s and then SHA-256-matched all 5,320 in 5.8s, reducing the payload-publication portion of future Btrfs bridge runs without weakening verification.

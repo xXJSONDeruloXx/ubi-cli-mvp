@@ -111,6 +111,21 @@ The same source also shows:
 
 **Planned handling:** the MVP should tolerate pagination if the endpoint exposes `totalCount`, but avoid claiming a hard server limit until validated locally.[16]
 
+## Desktop-client authentication and install-action boundary
+
+**Confirmed from source and local validation:** a public UbiServices ticket can authenticate this CLI and its direct Demux connection, but reviewed open-source clients do not expose a supported handoff of that ticket into `UbisoftConnect.exe`.[1][2][9][19]
+
+No reviewed source documented:
+
+- an OAuth device-authorization endpoint/client contract for Connect PC matching RFC 8628;
+- `uplay://auth`/SSO or another authentication URI;
+- a desktop command-line option that safely accepts a public session/remember-me ticket; or
+- supported language, destination, EULA, or auto-confirm parameters for the install URI.[21][22]
+
+**Confirmed from source and local validation:** `uplay://install/<productId>` is a real product-action route, but it opens Connect's official confirmation flow. The CLI must not guess additional URI parameters or fabricate the client registration/consent state that appears only after those confirmations.[19][21]
+
+**Experimentally validated in this repo:** Connect's remembered authentication is an opaque client profile bound to the Wine device identity. Secure-storage files or AppData alone were insufficient; migrating complete official Connect AppData with the matching Wine `MachineGuid` authenticated a newly installed prefix without copying product registration. This is one-way migration, not conversion of CLI credentials/session and not a parallel template: client token rotation may invalidate the source.[19]
+
 ## Proposed implementation path
 
 ### Auth/session

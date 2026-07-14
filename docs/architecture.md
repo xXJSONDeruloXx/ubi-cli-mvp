@@ -54,7 +54,7 @@ Current modules:
 - `ubisoft-connect.ts`: validate/cache the pinned official client installer, prepare explicit user-owned Wine prefixes, discover/start Connect, and run Wine-compatible child processes.
 - `connect-seed.ts`: discover client-owned paused-download staging, enforce process/path/symlink safeguards, hash-compare reconstructed payloads, and atomically seed only mismatched staged files without modifying Connect metadata.
 - `connect-profiles.ts`: atomically persist only non-secret product/source/prefix mappings in an owner-only local store.
-- `connect-prefix.ts`: guarded same-machine prefix migration with explicit authentication-state acknowledgement, owner-only targets, no symlink dereference, and reflink-only defaults.
+- `connect-prefix.ts`: guarded same-machine whole-prefix cloning plus targeted one-way migration of opaque official Connect AppData and its Wine device binding, with explicit authentication-state acknowledgement, stopped-process checks, atomic replacement/rollback, owner-only targets, and symlink rejection.
 
 ### `src/models/`
 
@@ -186,7 +186,7 @@ Current modules include:
 
 1. Require an explicit Wine prefix so the default prefix is never modified unexpectedly.
 2. Discover Connect or, with `--ensure-connect --yes`, download the exact pinned installer from its constrained official HTTPS endpoint and validate SHA-256 plus PE certificate-table structure before execution.
-3. Keep first credential/MFA entry in the official client UI; never transfer the CLI web session.
+3. Keep the first-ever credential/MFA entry in the official client UI; never convert or inject the CLI web session. A stopped authenticated prefix may instead migrate Connect's opaque AppData plus matching Wine `MachineGuid` one-way into an existing fresh client prefix; starting the target can invalidate the source.
 4. After official install finalization, invoke `uplay://launch/<productId>/0` when `--connect-product-id` is supplied, allowing Connect to perform its normal launch/entitlement path without a Play-button click.
 5. `connect-install <productId>` can invoke the supported `uplay://install/<productId>` handler to open Connect's official first-install confirmations without library navigation; the CLI does not synthesize confirmation clicks.
 6. `connect-profile` stores non-secret product/prefix paths, and `play <productId>` resolves that profile, invokes the launch URI, monitors the profiled game process through Wine, then stops Connect after game exit to avoid residual launcher/promotional UI.
@@ -241,6 +241,6 @@ The remaining frontier is the gap between **raw manifest/slice retrieval** and a
 - public/catalog product IDs do not always align 1:1 with Demux ownership product IDs
 - not every entitlement row exposes a usable `latestManifest`
 - complete reconstruction plus Connect staging/finalization is validated for one owned legacy title/build, but other titles may use different payload, staging, prerequisite, or registration semantics
-- first-time Connect authentication/MFA and one official Download initiation remain interactive because no supported unattended credential or install-initiation API has been established
-- one persistent shared prefix safely reuses remembered authentication; whole-prefix cloning works on the same machine but token rotation makes it a one-way migration rather than a parallel template
+- first-ever Connect authentication/MFA and each product's official language/options/EULA initialization remain interactive because no supported desktop ticket handoff or silent install-confirmation API has been established
+- one persistent shared prefix safely reuses remembered authentication; targeted AppData/device-state migration and whole-prefix cloning work on the same machine but token rotation makes both one-way migration rather than parallel templates
 - update/repair orchestration and automatic product-ID/profile selection remain incomplete

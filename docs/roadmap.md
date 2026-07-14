@@ -66,15 +66,16 @@ Exit criteria:
 Exit criteria:
 
 - [x] Bootstrap a pinned official Connect client in an explicit Wine prefix
-- [x] Keep first authentication/MFA inside the official client
+- [x] Keep first-ever authentication/MFA inside the official client; never convert or inject the CLI session
 - [x] Seed a paused official download without writing client registry/state/manifest metadata
 - [x] Return final verification/finalization to Connect
 - [x] Launch a registered product through the official `uplay://` handler
 - [x] Persist non-secret product/prefix/install profiles for a concise `ubi play <query>` workflow
 - [x] Monitor the profiled game lifecycle and stop Connect after exit to remove residual launcher/promotional UI
 - [x] Establish one shared persistent prefix as the safe remembered-auth model; constrain auth-prefix cloning to explicit one-way migration
+- [x] Guardedly migrate opaque official Connect AppData plus its Wine device binding into an existing stopped prefix without decoding authentication state
 - [x] Use the supported `uplay://install/<productId>` handler to open first-install confirmations without library navigation
-- [ ] Determine whether language/path confirmations can be supplied through a supported API without GUI click synthesis
+- [x] Establish that no supported public desktop-ticket handoff or language/path/auto-confirm install API is currently documented; do not guess parameters or synthesize client state
 - [ ] Add a guarded wait/orchestration mode around client-owned staging creation
 - [ ] Validate the bridge on another owned title/build before treating it as general
 
@@ -110,3 +111,5 @@ Exit criteria:
 - 2026-07-13: Added guarded `connect-seed` bridging for a paused official download. Live product-109 validation seeded 2,237 mismatched files / 2.52 GB in 22s, after which Connect finalized instantly and all 5,320 installed payload hashes matched the CLI source. Both official Play and `uplay://launch/109/0` ran the game successfully. Remaining manual steps are first Connect authentication/MFA and one official Download initiation to create client-owned staging metadata.
 - 2026-07-13: Added owner-only non-secret Connect profiles and `ubi play`; live validation launched product 109, tracked normal game exit, and stopped Connect automatically. A Btrfs whole-prefix auth clone opened signed in but invalidated the source after token rotation, establishing one shared prefix as the default and cloning as one-way migration only.
 - 2026-07-13: Confirmed `uplay://install/82` opens the official Assassin's Creed language/install confirmation directly. Added `connect-install` to remove library navigation while intentionally leaving authentication and confirmation dialogs to Connect.
+- 2026-07-13: Isolated remembered desktop authentication: secure-storage files or complete AppData alone failed in a clean prefix, while opaque Connect AppData plus the matching Wine `MachineGuid` regenerated ownership without login and copied no game registration. Added guarded `connect-prefix migrate-auth`; migration remains one-way because token refresh can retire the source.
+- 2026-07-13: Repeated the product-109 bridge from a genuinely fresh authenticated/unregistered prefix. Official prompts created staging; 157 files already matched, 5,163 files / 2,528,843,854 bytes were seeded, Connect finalized, all 5,320 final hashes matched, and profiled launch/lifecycle cleanup passed. This confirms the bridge but also confirms registration is not immediate: official per-product initialization remains required. Copy-on-write publication then reduced a controlled full 5,320-file / 2.55-GB same-filesystem seed benchmark to 6.3s plus 5.8s hash verification.
